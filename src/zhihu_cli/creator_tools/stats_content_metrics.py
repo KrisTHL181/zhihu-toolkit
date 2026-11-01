@@ -115,6 +115,14 @@ EXTRA_METRIC_LABELS: dict[str, str] = {
 }
 
 ALL_METRIC_KEYS = METRIC_KEYS + EXTRA_METRIC_KEYS
+
+# Fields that can be rebuilt by summing a content's daily records. Ratios are
+# excluded (positive_interact_rate is rebuilt separately as a PV-weighted
+# average), and so are UV/advanced metrics: new_follow_uv and
+# pageshow_uv are never additive, while the daily endpoint does not return
+# advanced data at all. new_follow_uv / follower_conversion_rate are also
+# always 0 in practice, so there is nothing to rebuild.
+SYNTH_ADDITIVE_KEYS = ["pv", "show", "play", "upvote", "like", "collect", "comment", "share", "re_pin"]
 ALL_METRIC_LABELS = {**METRIC_LABELS, **EXTRA_METRIC_LABELS}
 
 # ── format detection (same logic as plot_content_metrics.py) ────────────────
@@ -558,7 +566,10 @@ def _display_aggr_stats(stats: dict, synthesized: bool = False) -> None:
     heading("Content Metrics Statistics (Aggregated)")
 
     if synthesized:
-        info("Derived from daily time-series files (per-item lifetime sums).")
+        info("Derived from daily time-series files (additive metrics; positive_interact_rate is PV-weighted).")
+        omitted = stats.get("scan_summary", {}).get("omitted_fields", [])
+        if omitted:
+            info(f"Not derivable from daily files, omitted: {', '.join(omitted)}")
     else:
         warning("Data was fetched with --aggr (lifetime totals, no daily time-series).")
         info("For richer daily statistics, re-fetch without --aggr:  zhihu tools creator metrics")
@@ -746,7 +757,10 @@ def compute_and_display_stats(output_json: bool = False, aggr: bool = False) -> 
                 "note": "Used pre-existing aggr-format files on disk.",
             }
         elif daily_source_files:
-            # Synthesize aggr data: sum each daily file into a per-item totals dict
+            # Synthesize aggr data from the daily files. Only additive metrics
+            # are summed; positive_interact_rate is a PV-weighted average, the
+            # way Zhihu itself aggregates it. Rate/UV/advanced fields that
+            # cannot be rebuilt are omitted rather than reported as sums.
             synth_aggr: list[dict] = []
             for fp_stem in sorted(daily_source_files):
                 fp = METRICS_DIR / fp_stem
@@ -757,12 +771,16 @@ def compute_and_display_stats(output_json: bool = False, aggr: bool = False) -> 
                 if not isinstance(raw, list) or not raw:
                     continue
                 ctype = raw[0].get("type", "?")
-                totals: dict[str, float] = {}
+                totals: dict[str, float] = dict.fromkeys(SYNTH_ADDITIVE_KEYS, 0.0)
+                rate_num = 0.0
+                pv_total = 0.0
                 for rec in raw:
-                    for k, v in rec.items():
-                        if k in ("type", "date"):
-                            continue
-                        totals[k] = totals.get(k, 0) + float(v or 0)
+                    pv = float(rec.get("pv", 0) or 0)
+                    pv_total += pv
+                    rate_num += float(rec.get("positive_interact_rate", 0) or 0) * pv
+                    for k in SYNTH_ADDITIVE_KEYS:
+                        totals[k] += float(rec.get(k, 0) or 0)
+                totals["positive_interact_rate"] = rate_num / pv_total if pv_total else 0.0
                 synth_aggr.append(
                     {
                         "name": fp_stem.replace("metrics_full_", ""),
@@ -771,6 +789,7 @@ def compute_and_display_stats(output_json: bool = False, aggr: bool = False) -> 
                     }
                 )
             stats = _compute_aggr_stats(synth_aggr)
+            omitted = [k for k in ALL_METRIC_KEYS if k not in SYNTH_ADDITIVE_KEYS and k != "positive_interact_rate"]
             stats["scan_summary"] = {
                 "total_files": len(json_files),
                 "daily_files": len(daily_source_files),
@@ -778,7 +797,11 @@ def compute_and_display_stats(output_json: bool = False, aggr: bool = False) -> 
                 "aggr_files": len(aggr_files),
                 "unknown_files": len(unknown_files),
                 "mode": "aggr",
-                "note": f"Synthesized from {len(synth_aggr)} daily files (per-item sums).",
+                "note": (
+                    f"Synthesized from {len(synth_aggr)} daily files "
+                    "(additive metrics + PV-weighted positive_interact_rate)."
+                ),
+                "omitted_fields": omitted,
             }
         else:
             if output_json:
