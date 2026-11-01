@@ -64,15 +64,27 @@ def _load_asset_titles() -> dict[tuple[str, str], str]:
     return titles
 
 
+def _metrics_stem(file_stem: str) -> str:
+    """Strip the metrics filename prefix and ``.json`` suffix.
+
+    Daily files are named ``metrics_full_<type>_<id>.json`` and aggregated
+    files ``metrics_aggr_<type>_<id>.json``; both prefixes are accepted so
+    pre-existing files keep working.
+
+    :param file_stem: Metrics filename, with or without its ``.json`` suffix.
+    :returns: The ``<type>_<id>`` portion of the filename.
+    """
+    return file_stem.removeprefix("metrics_full_").removeprefix("metrics_aggr_").removesuffix(".json")
+
+
 def _title_for_file(file_stem: str, titles: dict[tuple[str, str], str]) -> str:
-    """Resolve the title for a ``metrics_full_<type>_<id>.json`` filename.
+    """Resolve the title for a metrics filename.
 
     :param file_stem: Metrics filename, with or without its ``.json`` suffix.
     :param titles: Mapping returned by :func:`_load_asset_titles`.
     :returns: The content title, or an empty string when it is unknown.
     """
-    core = file_stem.removeprefix("metrics_full_").removesuffix(".json")
-    content_type, _, content_id = core.partition("_")
+    content_type, _, content_id = _metrics_stem(file_stem).partition("_")
     return titles.get((content_type, content_id), "")
 
 
@@ -543,7 +555,7 @@ def _display_daily_stats(stats: dict) -> None:
         items = top_content[key]
         echo(f"\n  {f_bold(METRIC_LABELS[key])}:")
         for i, item in enumerate(items[:5]):
-            short_name = item["file"].replace("metrics_full_", "").removesuffix(".json")
+            short_name = _metrics_stem(item["file"])
             title = _clip_title(item.get("title") or "")
             label = f_title(title) if title else f_meta(short_name)
             item_type = item["type"]
@@ -724,7 +736,7 @@ def compute_and_display_stats(output_json: bool = False, aggr: bool = False) -> 
             continue
 
         if _is_aggr_format(data):
-            aggr_files.append({"name": fp.stem.replace("metrics_full_", ""), **data})
+            aggr_files.append({"name": _metrics_stem(fp.stem), **data})
         elif _is_daily_list(data):
             daily_source_files.add(fp.name)
             for record in data:
@@ -783,7 +795,7 @@ def compute_and_display_stats(output_json: bool = False, aggr: bool = False) -> 
                 totals["positive_interact_rate"] = rate_num / pv_total if pv_total else 0.0
                 synth_aggr.append(
                     {
-                        "name": fp_stem.replace("metrics_full_", ""),
+                        "name": _metrics_stem(fp_stem),
                         "type": ctype,
                         "totals": totals,
                     }

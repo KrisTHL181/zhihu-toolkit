@@ -117,10 +117,48 @@ def _extract_daily_item(d: dict[str, Any] | None, content_type: str = "") -> dic
     }
 
 
+def _migrate_metrics_filenames(metrics_dir: Path) -> int:
+    """Rename legacy metrics files whose name prefix mismatches their content.
+
+    Older versions wrote aggregated files as ``metrics_full_<type>_<id>.json``,
+    the same name as daily files, so the two formats overwrote each other.
+    Renaming them to ``metrics_aggr_*`` the first time keeps the aggregated
+    data when the next daily fetch runs. Files whose name already matches
+    their format are left alone.
+
+    :param metrics_dir: Directory holding the metrics JSON files.
+    :returns: Number of files renamed.
+    """
+    renamed = 0
+    for fp in sorted(metrics_dir.glob("metrics_*.json")):
+        try:
+            data = json.loads(fp.read_text(encoding="utf-8"))
+        except (json.JSONDecodeError, OSError):
+            continue
+        if isinstance(data, dict) and "totals" in data:
+            prefix, new_prefix = "metrics_full_", "metrics_aggr_"
+        elif isinstance(data, list) and data and isinstance(data[0], dict) and "date" in data[0]:
+            prefix, new_prefix = "metrics_aggr_", "metrics_full_"
+        else:
+            continue
+        if not fp.stem.startswith(prefix):
+            continue
+        target = metrics_dir / f"{new_prefix}{fp.stem.removeprefix(prefix)}.json"
+        if target.exists():
+            _cli_print(f"  [Skip] Both {fp.name} and {target.name} exist")
+            continue
+        fp.rename(target)
+        renamed += 1
+    if renamed:
+        _cli_print(f"  Renamed {renamed} legacy metrics file(s) to their correct prefix")
+    return renamed
+
+
 def run_batch_daily_analysis(use_aggr: bool = False) -> None:
     data_dir = zhihu_home() / "exports"
     metrics_dir = data_dir / "content_metrics"
     os.makedirs(metrics_dir, exist_ok=True)
+    _migrate_metrics_filenames(metrics_dir)
     assets_file = data_dir / "all_assets_list.json"
 
     answer_ids = []
@@ -262,7 +300,8 @@ def run_batch_daily_analysis(use_aggr: bool = False) -> None:
                         )
                     entries_label = f"{len(clean_data)} entries"
 
-                output_file = metrics_dir / f"metrics_full_{token['type']}_{token['id']}.json"
+                prefix = "metrics_aggr_" if use_aggr else "metrics_full_"
+                output_file = metrics_dir / f"{prefix}{token['type']}_{token['id']}.json"
                 with open(output_file, "w", encoding="utf-8") as f:
                     json.dump(clean_data, f, indent=4)
 

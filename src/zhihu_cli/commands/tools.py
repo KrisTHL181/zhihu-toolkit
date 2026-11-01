@@ -321,7 +321,11 @@ def register_tools(main_group):
         success(f"Saved {f_path(str(get_data_dir() / 'plots' / 'weekday_income_analysis.png'))}")
 
     @tools_creator.command("metrics")
-    @click.option("--aggr", is_flag=True, help="Use aggregated endpoint (single datapoint per content)")
+    @click.option(
+        "--aggr",
+        is_flag=True,
+        help="Use aggregated endpoint (single datapoint per content); saved as metrics_aggr_*.json",
+    )
     @click.option("--json", "output_json", is_flag=True, default=False, help="Output as JSON")
     def creator_metrics(aggr: bool, output_json: bool) -> None:
         """Fetch per-content daily metrics from Zhihu API."""
@@ -383,7 +387,12 @@ def register_tools(main_group):
 
     @tools_creator.command("stats")
     @click.option("--json", "output_json", is_flag=True, default=False, help="Output as JSON")
-    @click.option("--aggr", is_flag=True, default=False, help="Force aggregated format (only use --aggr files)")
+    @click.option(
+        "--aggr",
+        is_flag=True,
+        default=False,
+        help="Use aggregated-format files (metrics_aggr_*); synthesize from daily files if none exist",
+    )
     def creator_stats(output_json: bool, aggr: bool) -> None:
         """Compute descriptive statistics from all content_metrics/*.json files.
 
@@ -392,9 +401,12 @@ def register_tools(main_group):
         comprehensive statistics: per-metric summaries, daily aggregate
         stats, per-type breakdowns, and top-performing content.
 
-        Use --aggr to force the aggregated view (only reads files fetched
-        with 'zhihu tools creator metrics --aggr').  Without --aggr,
-        daily time-series files are preferred when both formats are present.
+        Use --aggr to force the aggregated view. Daily and aggregated files
+        coexist in the same directory (``metrics_full_*`` and
+        ``metrics_aggr_*``); --aggr prefers the aggregated ones and
+        synthesizes totals from daily files when none are present. Without
+        --aggr, daily time-series files are preferred when both formats are
+        present.
 
         Use --json for machine-readable output.
         """

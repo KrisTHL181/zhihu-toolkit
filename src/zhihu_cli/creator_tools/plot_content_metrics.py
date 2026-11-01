@@ -66,6 +66,16 @@ def _is_daily_list(data: object) -> bool:
     return isinstance(data, list) and len(data) > 0 and isinstance(data[0], dict) and "date" in data[0]
 
 
+def _metrics_stem(file_stem: str) -> str:
+    """Strip the metrics filename prefix and ``.json`` suffix.
+
+    Daily files are named ``metrics_full_<type>_<id>.json`` and aggregated
+    files ``metrics_aggr_<type>_<id>.json``; both prefixes are accepted so
+    pre-existing files keep working.
+    """
+    return file_stem.removeprefix("metrics_full_").removeprefix("metrics_aggr_").removesuffix(".json")
+
+
 def plot_content_metrics(no_pv: bool = False, no_show: bool = False) -> None:
     """Generate a combined daily+cumulative chart from all content_metrics JSON files.
 
@@ -116,7 +126,7 @@ def plot_content_metrics(no_pv: bool = False, no_show: bool = False) -> None:
                     if record.get("date"):
                         daily_records.append(record)
             elif _is_aggr_format(data):
-                aggr_files.append({"name": fp.stem.replace("metrics_full_", ""), **data})
+                aggr_files.append({"name": _metrics_stem(fp.stem), **data})
             else:
                 unknown_files.append(fp.name)
 
