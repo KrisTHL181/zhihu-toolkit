@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import json
 import statistics
+import unicodedata
 from collections import defaultdict
 
 from zhihu_cli.output import (
@@ -21,6 +22,7 @@ from zhihu_cli.output import (
     f_label,
     f_meta,
     f_num,
+    f_title,
     heading,
     info,
     print_json,
@@ -32,6 +34,47 @@ from zhihu_cli.paths import zhihu_home
 
 DATA_DIR = zhihu_home()
 METRICS_DIR = DATA_DIR / "exports" / "content_metrics"
+ASSETS_FILE = DATA_DIR / "exports" / "all_assets_list.json"
+
+
+def _load_asset_titles() -> dict[tuple[str, str], str]:
+    """Load a ``(type, id) → title`` map from the scraped asset list.
+
+    The metrics filenames only carry the content ID, so titles are looked up
+    in ``exports/all_assets_list.json`` (written by ``zhihu scrape``).
+
+    :returns: Mapping of ``(content type, content id)`` to its title; empty
+        when the asset list is missing or unreadable.
+    """
+    try:
+        raw = json.loads(ASSETS_FILE.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError):
+        return {}
+    if not isinstance(raw, list):
+        return {}
+    titles: dict[tuple[str, str], str] = {}
+    for asset in raw:
+        if not isinstance(asset, dict):
+            continue
+        asset_id = asset.get("id")
+        title = asset.get("title")
+        if asset_id is None or not title:
+            continue
+        titles[(str(asset.get("type", "")), str(asset_id))] = str(title)
+    return titles
+
+
+def _title_for_file(file_stem: str, titles: dict[tuple[str, str], str]) -> str:
+    """Resolve the title for a ``metrics_full_<type>_<id>.json`` filename.
+
+    :param file_stem: Metrics filename, with or without its ``.json`` suffix.
+    :param titles: Mapping returned by :func:`_load_asset_titles`.
+    :returns: The content title, or an empty string when it is unknown.
+    """
+    core = file_stem.removeprefix("metrics_full_").removesuffix(".json")
+    content_type, _, content_id = core.partition("_")
+    return titles.get((content_type, content_id), "")
+
 
 # ── metric definitions (mirrors plot_content_metrics.py) ────────────────────
 
@@ -135,6 +178,24 @@ def _is_integer_metric(key: str) -> bool:
     )
 
 
+def _clip_title(title: str, max_width: int = 60) -> str:
+    """Shorten a title to at most ``max_width`` terminal columns.
+
+    East-Asian wide characters count as two columns, so CJK titles are
+    clipped before they wrap the ranking lines.
+
+    :param title: The original title.
+    :param max_width: Maximum display width, including the trailing ellipsis.
+    :returns: The title, truncated with ``…`` when it is too long.
+    """
+    width = 0
+    for idx, char in enumerate(title):
+        width += 2 if unicodedata.east_asian_width(char) in ("W", "F") else 1
+        if width > max_width - 1:
+            return title[:idx] + "…"
+    return title
+
+
 # ── daily-format stats ─────────────────────────────────────────────────────
 
 
@@ -219,11 +280,18 @@ def _compute_daily_stats(daily_records: list[dict], daily_source_files: set[str]
 
     # top/bottom N per metric
     top_n = 10
+    titles = _load_asset_titles()
     top_content: dict[str, list[dict]] = {}
     for key in present_metrics:
         sorted_items = sorted(file_sums, key=lambda x: x.get(key, 0), reverse=True)
         top_content[key] = [
-            {"file": it["_file"], "type": it["_type"], "value": it.get(key, 0), "records": it["_records"]}
+            {
+                "file": it["_file"],
+                "title": _title_for_file(it["_file"], titles),
+                "type": it["_type"],
+                "value": it.get(key, 0),
+                "records": it["_records"],
+            }
             for it in sorted_items[:top_n]
             if it.get(key, 0) > 0
         ]
@@ -467,13 +535,13 @@ def _display_daily_stats(stats: dict) -> None:
         items = top_content[key]
         echo(f"\n  {f_bold(METRIC_LABELS[key])}:")
         for i, item in enumerate(items[:5]):
-            short_name = item["file"].replace("metrics_full_", "")
+            short_name = item["file"].replace("metrics_full_", "").removesuffix(".json")
+            title = _clip_title(item.get("title") or "")
+            label = f_title(title) if title else f_meta(short_name)
             item_type = item["type"]
             item_recs = item["records"]
             val_str = _fmt_num(item["value"], _is_integer_metric(key))
-            echo(
-                f"    {f_dim(f'{i + 1}.')} {f_num(val_str)}  {short_name}  {f_meta(f'({item_type}, {item_recs} days)')}"
-            )
+            echo(f"    {f_dim(f'{i + 1}.')} {f_num(val_str)}  {label}  {f_meta(f'({item_type}, {item_recs} days)')}")
 
     blank()
     divider()
