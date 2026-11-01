@@ -388,31 +388,31 @@ def register_tools(main_group):
     @tools_creator.command("stats")
     @click.option("--json", "output_json", is_flag=True, default=False, help="Output as JSON")
     @click.option(
-        "--aggr",
-        is_flag=True,
-        default=False,
-        help="Use aggregated-format files (metrics_aggr_*); synthesize from daily files if none exist",
+        "--only",
+        type=click.Choice(["daily", "aggr", "both"]),
+        default="both",
+        show_default=True,
+        help="Which view to show: daily time series, aggregated lifetime totals, or both",
     )
-    def creator_stats(output_json: bool, aggr: bool) -> None:
+    def creator_stats(output_json: bool, only: str) -> None:
         """Compute descriptive statistics from all content_metrics/*.json files.
 
-        Scans every metrics file in ~/.zhihu-cli/exports/content_metrics/,
-        auto-detects daily vs. aggregated (--aggr) format, and prints
-        comprehensive statistics: per-metric summaries, daily aggregate
+        Scans every metrics file in ~/.zhihu-cli/exports/content_metrics/ and
+        prints comprehensive statistics: per-metric summaries, daily aggregate
         stats, per-type breakdowns, and top-performing content.
 
-        Use --aggr to force the aggregated view. Daily and aggregated files
-        coexist in the same directory (``metrics_full_*`` and
-        ``metrics_aggr_*``); --aggr prefers the aggregated ones and
-        synthesizes totals from daily files when none are present. Without
-        --aggr, daily time-series files are preferred when both formats are
-        present.
+        By default both views are shown: the daily time-series report followed
+        by a "Lifetime Totals" section. Daily and aggregated files coexist in
+        the same directory (``metrics_full_*`` and ``metrics_aggr_*``); the
+        lifetime totals prefer the aggregated files and are synthesized from
+        daily files when none are present.
 
-        Use --json for machine-readable output.
+        Use --only daily|aggr to show a single view, and --json for
+        machine-readable output.
         """
         from zhihu_cli.creator_tools.stats_content_metrics import compute_and_display_stats
 
-        compute_and_display_stats(output_json=output_json, aggr=aggr)
+        compute_and_display_stats(output_json=output_json, only=only)
 
     @tools_creator_income.command("income")
     @click.option("--start-date", default=None, help="Start date (YYYY-MM-DD), default: 30 days ago")

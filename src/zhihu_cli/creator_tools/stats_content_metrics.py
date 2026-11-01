@@ -1,7 +1,8 @@
 """Compute and display comprehensive statistics from content_metrics/*.json files.
 
-Handles both daily-list (default) and aggregated (``--aggr``) formats,
-mirroring the detection logic in :mod:`plot_content_metrics`.
+Handles both daily-list and aggregated formats, mirroring the detection logic
+in :mod:`plot_content_metrics`. Both views are shown by default; ``only``
+selects daily, aggregated, or both.
 
 Invoked via ``zhihu tools creator stats``.
 """
@@ -423,12 +424,14 @@ def _infer_type_from_name(name: str) -> str:
 # ── display helpers ────────────────────────────────────────────────────────
 
 
-def _display_daily_stats(stats: dict) -> None:
+def _display_daily_stats(stats: dict, merged: bool = False) -> None:
     """Print a styled terminal report for daily-format statistics.
 
     :param stats: Result dict from :func:`_compute_daily_stats`.
+    :param merged: If True, another section follows this report, so use the
+        plain report title instead of the ``(Daily)`` variant.
     """
-    heading("Content Metrics Statistics (Daily)")
+    heading("Content Metrics Statistics" if merged else "Content Metrics Statistics (Daily)")
 
     # ── overview ─────────────────────────────────────────────────────────
     section("Overview")
@@ -569,28 +572,38 @@ def _display_daily_stats(stats: dict) -> None:
     echo(f"  {f_label('Data source:')} {f_num(stats['file_count'])} files, {f_num(f'{record_count:,}')} daily records")
 
 
-def _display_aggr_stats(stats: dict, synthesized: bool = False) -> None:
+def _display_aggr_stats(stats: dict, synthesized: bool = False, merged: bool = False) -> None:
     """Print a styled terminal report for aggregated-format statistics.
 
     :param stats: Result dict from :func:`_compute_aggr_stats`.
     :param synthesized: If True, the data was synthesized from daily files.
+    :param merged: If True, append a "Lifetime Totals" section to an existing
+        report instead of printing a standalone report.
     """
-    heading("Content Metrics Statistics (Aggregated)")
+    if merged:
+        section("Lifetime Totals (Aggregated)")
+    else:
+        heading("Content Metrics Statistics (Aggregated)")
 
+    note_shown = False
     if synthesized:
         info("Derived from daily time-series files (additive metrics; positive_interact_rate is PV-weighted).")
+        note_shown = True
         omitted = stats.get("scan_summary", {}).get("omitted_fields", [])
         if omitted:
             info(f"Not derivable from daily files, omitted: {', '.join(omitted)}")
-    else:
+    elif not merged:
         warning("Data was fetched with --aggr (lifetime totals, no daily time-series).")
         info("For richer daily statistics, re-fetch without --aggr:  zhihu tools creator metrics")
-    blank()
+        note_shown = True
+    if not merged or note_shown:
+        blank()
 
     # ── overview ─────────────────────────────────────────────────────────
-    section("Overview")
-    echo(f"  {f_label('Files:')}  {f_num(stats['file_count'])}")
-    echo(f"  {f_label('Types:')}  {', '.join(f'{t}={f_num(n)}' for t, n in stats['content_types'].items())}")
+    if not merged:
+        section("Overview")
+        echo(f"  {f_label('Files:')}  {f_num(stats['file_count'])}")
+        echo(f"  {f_label('Types:')}  {', '.join(f'{t}={f_num(n)}' for t, n in stats['content_types'].items())}")
 
     # ── per-metric summary ───────────────────────────────────────────────
     section("Per-Metric Summary (lifetime totals per content item)")
@@ -694,15 +707,67 @@ def _display_aggr_stats(stats: dict, synthesized: bool = False) -> None:
 # ── main entry point ───────────────────────────────────────────────────────
 
 
-def compute_and_display_stats(output_json: bool = False, aggr: bool = False) -> None:
+def _synthesize_aggr_totals(daily_source_files: set[str]) -> tuple[dict | None, list[str]]:
+    """Rebuild aggregated-format totals from daily time-series files.
+
+    Only additive counters are summed. ``positive_interact_rate`` is rebuilt
+    as the PV-weighted average Zhihu itself uses; rate/UV/advanced fields that
+    cannot be derived from daily records are omitted rather than reported as
+    sums.
+
+    :param daily_source_files: Filenames of daily-format metrics files.
+    :returns: ``(stats, omitted_fields)``, where ``stats`` is None when no
+        file could be read.
+    """
+    synth_aggr: list[dict] = []
+    for fp_stem in sorted(daily_source_files):
+        fp = METRICS_DIR / fp_stem
+        try:
+            raw = json.loads(fp.read_text(encoding="utf-8"))
+        except (json.JSONDecodeError, OSError):
+            continue
+        if not isinstance(raw, list) or not raw:
+            continue
+        ctype = raw[0].get("type", "?")
+        totals: dict[str, float] = dict.fromkeys(SYNTH_ADDITIVE_KEYS, 0.0)
+        rate_num = 0.0
+        pv_total = 0.0
+        for rec in raw:
+            pv = float(rec.get("pv", 0) or 0)
+            pv_total += pv
+            rate_num += float(rec.get("positive_interact_rate", 0) or 0) * pv
+            for k in SYNTH_ADDITIVE_KEYS:
+                totals[k] += float(rec.get(k, 0) or 0)
+        totals["positive_interact_rate"] = rate_num / pv_total if pv_total else 0.0
+        synth_aggr.append(
+            {
+                "name": _metrics_stem(fp_stem),
+                "type": ctype,
+                "totals": totals,
+            }
+        )
+    if not synth_aggr:
+        return None, []
+    omitted = [k for k in ALL_METRIC_KEYS if k not in SYNTH_ADDITIVE_KEYS and k != "positive_interact_rate"]
+    return _compute_aggr_stats(synth_aggr), omitted
+
+
+def compute_and_display_stats(output_json: bool = False, only: str = "both") -> None:
     """Scan all content_metrics JSON files, compute statistics, and display them.
 
-    Handles both daily-list and aggregated ``--aggr`` formats, dispatching
-    to the appropriate computation and display routines.
+    Daily time-series and aggregated lifetime totals can be shown together or
+    independently. Both views are produced by default: the daily report is
+    followed by a "Lifetime Totals" section, which prefers aggregated-format
+    files and falls back to synthesizing totals from the daily files.
 
-    :param output_json: If True, output a JSON dict instead of styled terminal output.
-    :param aggr: If True, force using only aggregated-format files (skip daily files).
+    :param output_json: If True, output a ``{"daily": ..., "aggr": ...}`` JSON
+        object instead of styled terminal output.
+    :param only: Which view to produce — ``"daily"``, ``"aggr"`` or ``"both"``
+        (the default).
+    :raises: ValueError if ``only`` is not one of the accepted values.
     """
+    if only not in ("daily", "aggr", "both"):
+        raise ValueError(f"only must be 'daily', 'aggr' or 'both', got {only!r}")
     if not METRICS_DIR.exists():
         if output_json:
             print_json({"error": "metrics directory not found", "path": str(METRICS_DIR)})
@@ -754,117 +819,86 @@ def compute_and_display_stats(output_json: bool = False, aggr: bool = False) -> 
             info("Run first: zhihu tools creator metrics")
         return
 
-    if aggr:
-        # --aggr mode: derive per-item lifetime totals from daily files
-        # (or use existing aggr-format files if present).
-        if aggr_files:
-            stats = _compute_aggr_stats(aggr_files)
-            stats["scan_summary"] = {
-                "total_files": len(json_files),
-                "daily_files": len(daily_source_files),
-                "daily_records": len(daily_records),
-                "aggr_files": len(aggr_files),
-                "unknown_files": len(unknown_files),
-                "mode": "aggr",
-                "note": "Used pre-existing aggr-format files on disk.",
-            }
-        elif daily_source_files:
-            # Synthesize aggr data from the daily files. Only additive metrics
-            # are summed; positive_interact_rate is a PV-weighted average, the
-            # way Zhihu itself aggregates it. Rate/UV/advanced fields that
-            # cannot be rebuilt are omitted rather than reported as sums.
-            synth_aggr: list[dict] = []
-            for fp_stem in sorted(daily_source_files):
-                fp = METRICS_DIR / fp_stem
-                try:
-                    raw = json.loads(fp.read_text(encoding="utf-8"))
-                except (json.JSONDecodeError, OSError):
-                    continue
-                if not isinstance(raw, list) or not raw:
-                    continue
-                ctype = raw[0].get("type", "?")
-                totals: dict[str, float] = dict.fromkeys(SYNTH_ADDITIVE_KEYS, 0.0)
-                rate_num = 0.0
-                pv_total = 0.0
-                for rec in raw:
-                    pv = float(rec.get("pv", 0) or 0)
-                    pv_total += pv
-                    rate_num += float(rec.get("positive_interact_rate", 0) or 0) * pv
-                    for k in SYNTH_ADDITIVE_KEYS:
-                        totals[k] += float(rec.get(k, 0) or 0)
-                totals["positive_interact_rate"] = rate_num / pv_total if pv_total else 0.0
-                synth_aggr.append(
-                    {
-                        "name": _metrics_stem(fp_stem),
-                        "type": ctype,
-                        "totals": totals,
-                    }
-                )
-            stats = _compute_aggr_stats(synth_aggr)
-            omitted = [k for k in ALL_METRIC_KEYS if k not in SYNTH_ADDITIVE_KEYS and k != "positive_interact_rate"]
-            stats["scan_summary"] = {
-                "total_files": len(json_files),
-                "daily_files": len(daily_source_files),
-                "daily_records": len(daily_records),
-                "aggr_files": len(aggr_files),
-                "unknown_files": len(unknown_files),
-                "mode": "aggr",
-                "note": (
-                    f"Synthesized from {len(synth_aggr)} daily files "
-                    "(additive metrics + PV-weighted positive_interact_rate)."
-                ),
-                "omitted_fields": omitted,
-            }
-        else:
-            if output_json:
-                print_json({"error": "no data to aggregate", "unknown_files": unknown_files})
-            else:
-                warning("No data available for aggregation.")
-            return
-    elif daily_records:
-        stats = _compute_daily_stats(daily_records, daily_source_files)
-        # ── add scan summary ─────────────────────────────────────────────────
-        stats["scan_summary"] = {
-            "total_files": len(json_files),
-            "daily_files": len(daily_source_files),
-            "daily_records": len(daily_records),
-            "aggr_files": len(aggr_files),
-            "unknown_files": len(unknown_files),
-            "mode": "auto",
-        }
-    else:
-        stats = _compute_aggr_stats(aggr_files)
-        stats["scan_summary"] = {
-            "total_files": len(json_files),
-            "daily_files": len(daily_source_files),
-            "daily_records": len(daily_records),
-            "aggr_files": len(aggr_files),
-            "unknown_files": len(unknown_files),
-            "mode": "auto",
-        }
-    if unknown_files:
-        stats["unknown_file_names"] = unknown_files[:20]
+    want_daily = only in ("daily", "both")
+    want_aggr = only in ("aggr", "both")
 
+    daily_stats = _compute_daily_stats(daily_records, daily_source_files) if want_daily and daily_records else None
+
+    aggr_stats: dict | None = None
+    aggr_synthesized = False
+    aggr_omitted: list[str] = []
+    if want_aggr:
+        if aggr_files:
+            aggr_stats = _compute_aggr_stats(aggr_files)
+        elif daily_source_files:
+            aggr_stats, aggr_omitted = _synthesize_aggr_totals(daily_source_files)
+            aggr_synthesized = aggr_stats is not None
+
+    if only == "daily" and daily_stats is None:
+        if output_json:
+            print_json({"error": "no daily data found", "unknown_files": unknown_files})
+        else:
+            warning("No daily time-series files found.")
+            info("Run first: zhihu tools creator metrics")
+        return
+    if only == "aggr" and aggr_stats is None:
+        if output_json:
+            print_json({"error": "no data to aggregate", "unknown_files": unknown_files})
+        else:
+            warning("No data available for aggregation.")
+        return
+
+    # ── scan summaries ───────────────────────────────────────────────────
+    base_scan = {
+        "total_files": len(json_files),
+        "daily_files": len(daily_source_files),
+        "daily_records": len(daily_records),
+        "aggr_files": len(aggr_files),
+        "unknown_files": len(unknown_files),
+    }
+    if unknown_files:
+        base_scan["unknown_file_names"] = unknown_files[:20]
+    if daily_stats is not None:
+        daily_stats["scan_summary"] = {**base_scan, "mode": "daily"}
+    if aggr_stats is not None:
+        aggr_stats["scan_summary"] = {
+            **base_scan,
+            "mode": "aggr",
+            "note": (
+                "Synthesized from daily files (additive metrics + PV-weighted positive_interact_rate)."
+                if aggr_synthesized
+                else "Used pre-existing aggr-format files on disk."
+            ),
+        }
+        if aggr_omitted:
+            aggr_stats["scan_summary"]["omitted_fields"] = aggr_omitted
+
+    # ── JSON output ──────────────────────────────────────────────────────
     if output_json:
-        print_json(stats)
+        if only == "both":
+            print_json({"daily": daily_stats, "aggr": aggr_stats})
+        elif only == "daily":
+            print_json({"daily": daily_stats})
+        else:
+            print_json({"aggr": aggr_stats})
         return
 
     # ── status line ──────────────────────────────────────────────────────
-    if aggr:
-        n_items = stats.get("per_metric", {}).get("pv", {}).get("count", 0)
-        info(f"Scanned {len(json_files)} files -> {n_items} items (--aggr mode)")
-    else:
-        info(
-            f"Scanned {len(json_files)} files → "
-            f"{len(daily_source_files)} daily ({len(daily_records):,} records), "
-            f"{len(aggr_files)} aggregated"
-        )
+    info(
+        f"Scanned {len(json_files)} files → "
+        f"{len(daily_source_files)} daily ({len(daily_records):,} records), "
+        f"{len(aggr_files)} aggregated"
+    )
     if unknown_files:
         warning(f"Skipped {len(unknown_files)} unknown-format files")
 
     # ── dispatch to display ──────────────────────────────────────────────
-    if aggr or stats.get("format") == "aggr":
-        is_synth = stats.get("scan_summary", {}).get("note", "").startswith("Synthesized")
-        _display_aggr_stats(stats, synthesized=is_synth)
-    else:
-        _display_daily_stats(stats)
+    if daily_stats is not None:
+        _display_daily_stats(daily_stats, merged=only == "both" and aggr_stats is not None)
+        if aggr_stats is not None:
+            _display_aggr_stats(aggr_stats, synthesized=aggr_synthesized, merged=only == "both")
+    elif aggr_stats is not None:
+        if only == "both":
+            warning("Daily time-series files not found; showing aggregated data only.")
+            info("Run: zhihu tools creator metrics")
+        _display_aggr_stats(aggr_stats, synthesized=aggr_synthesized)
