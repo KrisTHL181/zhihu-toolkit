@@ -37,6 +37,93 @@ def _get_lxml_html() -> Any:
 
 _eeimg_re = re.compile(r"eeimg|equation")
 
+#: Fallback separator between adjacent inline elements whose delimiters merge.
+#: CommonMark joins back-to-back delimiter runs, so ``**a****b**`` is parsed as
+#: one strong span instead of two. Same-type runs are merged where safe; when
+#: merging is ambiguous (mixed or nested delimiters), an empty HTML comment
+#: keeps the runs apart without rendering any content.
+_INLINE_SEPARATOR = "<!-- -->"
+
+#: Characters that open/close a Markdown inline delimiter (emphasis and code).
+_DELIMITER_CHARS: frozenset[str] = frozenset("*_~`")
+
+
+def _delimiters_collide(previous: str, current: str) -> bool:
+    """Return whether adjacent rendered parts would merge into one delimiter run.
+
+    :param previous: The Markdown rendered for the preceding element.
+    :param current: The Markdown rendered for the current element.
+    :returns: ``True`` when *previous* ends with the delimiter *current* starts with.
+    """
+    return bool(previous) and bool(current) and previous[-1] == current[0] and previous[-1] in _DELIMITER_CHARS
+
+
+def _simple_delimited(part: str) -> tuple[str, str] | None:
+    """Return ``(delimiter, inner)`` when *part* is a simple delimited run.
+
+    Simple means one delimiter pair wrapping text that contains no ``*`` (for
+    emphasis) or backtick (for code). Nested emphasis such as ``***a***`` is
+    not simple: merging it with a neighbour would produce an ambiguous
+    delimiter run.
+
+    :param part: The Markdown rendered for one inline element.
+    :returns: The delimiter and inner text, or ``None`` when not simple.
+    """
+    for delimiter in ("**", "*"):
+        if part.startswith(delimiter) and part.endswith(delimiter) and len(part) > 2 * len(delimiter):
+            inner = part[len(delimiter) : -len(delimiter)]
+            if inner and "*" not in inner:
+                return delimiter, inner
+    if part.startswith("`") and part.endswith("`") and len(part) > 2:
+        inner = part[1:-1]
+        if inner and "`" not in inner:
+            return "`", inner
+    return None
+
+
+def _merge_delimited(previous: str, current: str) -> str | None:
+    """Merge two simple adjacent inline runs sharing the same delimiter.
+
+    Two sibling elements of the same inline type are a single semantic run in
+    HTML, so ``<strong>a</strong><strong>b</strong>`` should become ``**ab**``
+    rather than two delimiter runs that need an invisible separator. Merging is
+    only safe when both sides are *simple* runs (:func:`_simple_delimited`) with
+    the same delimiter; nested emphasis and mixed types fall back to
+    :data:`_INLINE_SEPARATOR`.
+
+    :param previous: The Markdown rendered for the preceding element.
+    :param current: The Markdown rendered for the current element.
+    :returns: The merged run, or ``None`` when no safe merge exists.
+    """
+    left_run = _simple_delimited(previous)
+    right_run = _simple_delimited(current)
+    if left_run is None or right_run is None or left_run[0] != right_run[0]:
+        return None
+    delimiter, left = left_run
+    _, right = right_run
+    return f"{delimiter}{left}{right}{delimiter}"
+
+
+def _is_simple_mixed_emphasis(previous: str, current: str) -> bool:
+    """Return whether two simple emphasis runs use different delimiters.
+
+    ``<em>a</em><strong>b</strong>`` is unambiguous as ``*a***b**`` and needs
+    no separator, unlike a pair of nested runs.
+
+    :param previous: The Markdown rendered for the preceding element.
+    :param current: The Markdown rendered for the current element.
+    :returns: ``True`` when both are simple emphasis runs of different kinds.
+    """
+    left_run = _simple_delimited(previous)
+    right_run = _simple_delimited(current)
+    return bool(
+        left_run
+        and right_run
+        and left_run[0] in ("**", "*")
+        and right_run[0] in ("**", "*")
+        and left_run[0] != right_run[0]
+    )
+
 
 # ── lxml helpers ──────────────────────────────────────────────────────────────
 
@@ -352,7 +439,18 @@ class PageToMarkdown:
     # ── inline descent ───────────────────────────────────────────────────
 
     def _render_inline(self, element) -> str:
-        """Process inline content, returning plain text with inline Markdown.
+        """Process inline content, preserving the source's whitespace.
+
+        Adjacent inline elements are concatenated without inserted spaces: the
+        HTML already says where spaces belong, and adding one around every
+        ``<strong>`` / ``<span>`` / ``<a>`` corrupts CJK text and separates
+        punctuation. Text nodes collapse runs of HTML whitespace to a single
+        space, keeping the leading/trailing space that separates them from a
+        neighbouring element. Two adjacent elements of the same inline type
+        are merged where unambiguous (``**a**`` + ``**b**`` -> ``**ab**``),
+        as are simple mixed emphasis pairs (``*a*`` + ``**b**`` ->
+        ``*a***b**``); any other colliding delimiter run is kept apart by an
+        invisible :data:`_INLINE_SEPARATOR` comment.
 
         :param element: An lxml element or a plain text node.
         :returns: The inline Markdown, or ``""`` when there is none.
@@ -363,8 +461,38 @@ class PageToMarkdown:
         if not hasattr(element, "tag"):
             return ""
 
-        parts = [md for node in _iter_nodes(element) if (md := self._dispatch(node))]
-        return " ".join(parts)
+        parts: list[str] = []
+        previous: str | None = None
+        previous_is_element = False
+        for node in _iter_nodes(element):
+            if isinstance(node, str):
+                text = re.sub(r"\s+", " ", node)
+                if not text:
+                    continue
+                parts.append(text)
+                previous = text
+                previous_is_element = False
+            else:
+                md = self._dispatch(node)
+                if not md:
+                    continue
+                if previous_is_element and previous is not None:
+                    merged = _merge_delimited(previous, md)
+                    if merged is not None:
+                        parts[-1] = merged
+                        previous = merged
+                        continue
+                    if _is_simple_mixed_emphasis(previous, md):
+                        combined = previous + md
+                        parts[-1] = combined
+                        previous = combined
+                        continue
+                    if _delimiters_collide(previous, md):
+                        parts.append(_INLINE_SEPARATOR)
+                parts.append(md)
+                previous = md
+                previous_is_element = True
+        return "".join(parts).strip()
 
     # ── handlers ─────────────────────────────────────────────────────────
 
@@ -477,8 +605,18 @@ class PageToMarkdown:
         return f"`{element.text_content()}`"
 
     def _render_break(self, element) -> str:
-        """Render ``<br>`` as a newline."""
-        return "\n"
+        """Render ``<br>`` as raw HTML.
+
+        A Markdown hard break (two trailing spaces or a backslash) is fragile:
+        trailing whitespace gets stripped, and a real newline breaks list-item
+        continuation and blockquote lines instead of staying inside them. Raw
+        ``<br>`` survives in every inline context — paragraph, heading, list
+        item, blockquote and table cell — and this module already emits raw
+        HTML for ``<u>`` and ``<video>``.
+
+        :returns: The ``"<br>"`` tag.
+        """
+        return "<br>"
 
     def _render_reference(self, element) -> str:
         """Render a Zhihu citation (``sup[data-draft-type="reference"]``).
@@ -525,18 +663,22 @@ class PageToMarkdown:
     # ── generic fallback ─────────────────────────────────────────────────
 
     def _render_children(self, element) -> str | None:
-        """Recursively render an element's children and join them.
+        """Recursively render an element's children.
 
-        Block-level containers join with a blank line, everything else with a
-        single space.
+        Block containers (:data:`_BLOCK_TAGS`) that hold a direct block-level
+        child are a sequence of blocks, so their rendered parts join with a
+        blank line. Everything else — inline containers such as ``<span>`` and
+        block containers that only hold inline content — goes through
+        :meth:`_render_inline`, which preserves the source whitespace instead
+        of inventing spaces between adjacent inline elements.
 
         :param element: The element whose children should be rendered.
         :returns: The joined Markdown, or ``None`` when no child contributes.
         """
-        parts = [md for node in _iter_nodes(element) if (md := self._dispatch(node))]
-        if not parts:
-            return None
-        return "\n\n".join(parts) if _tag_name(element) in _BLOCK_TAGS else " ".join(parts)
+        if _tag_name(element) in _BLOCK_TAGS and _has_block_child(element):
+            parts = [md for node in _iter_nodes(element) if (md := self._dispatch(node))]
+            return "\n\n".join(parts) if parts else None
+        return self._render_inline(element) or None
 
     # ── table ────────────────────────────────────────────────────────────
 
@@ -558,12 +700,26 @@ class PageToMarkdown:
                 yield tr
 
     def _row_cells(self, tr: HtmlElement) -> list[str]:
-        """Return the cell texts of *tr* in document order.
+        """Return the rendered cell Markdown of *tr* in document order.
+
+        Cells are rendered inline instead of taken through ``text_content()``:
+        Zhihu strips most formatting inside table cells but keeps ``<br>``, so
+        ``打开文件<br>读取内容`` must stay on two lines. A real newline would
+        terminate the Markdown table row, hence the ``<br>`` fallback; literal
+        pipes are escaped because GFM uses them as column separators.
 
         :param tr: A table row.
-        :returns: The stripped text of each direct ``<td>`` / ``<th>`` child.
+        :returns: The Markdown of each direct ``<td>`` / ``<th>`` child.
         """
-        return [cell.text_content().strip() for cell in tr.xpath("./td | ./th")]
+        cells: list[str] = []
+        for cell in tr.xpath("./td | ./th"):
+            md = self._render_inline(cell)
+            # A real newline would terminate the Markdown table row.
+            md = md.replace("\n", "<br>")
+            # GFM tables need literal pipes escaped.
+            md = md.replace("|", "\\|")
+            cells.append(md.strip())
+        return cells
 
     def _render_table(self, table: HtmlElement) -> str:
         """Convert an HTML table to a Markdown table.
@@ -618,6 +774,43 @@ _SKIP_TAGS: frozenset[str] = frozenset(
 
 #: Containers whose children are joined by a blank line instead of a space.
 _BLOCK_TAGS: frozenset[str] = frozenset({"div", "section", "article", "main"})
+
+#: Tags that occupy their own block when they appear as a direct child.
+_BLOCK_LEVEL_TAGS: frozenset[str] = frozenset(
+    {
+        "p",
+        "div",
+        "section",
+        "article",
+        "main",
+        "h1",
+        "h2",
+        "h3",
+        "h4",
+        "h5",
+        "h6",
+        "table",
+        "ul",
+        "ol",
+        "blockquote",
+        "pre",
+        "figure",
+        "hr",
+    }
+)
+
+
+def _has_block_child(element: HtmlElement) -> bool:
+    """Return whether *element* has a direct block-level child element.
+
+    Only direct children count: a ``<div>`` wrapping a paragraph is a sequence
+    of blocks, while a ``<div>`` whose only block-level descendants sit inside
+    a ``<span>`` is still inline content.
+
+    :param element: The container to inspect.
+    :returns: ``True`` when a direct child's tag is in :data:`_BLOCK_LEVEL_TAGS`.
+    """
+    return any(_tag_name(child) in _BLOCK_LEVEL_TAGS for child in element)
 
 
 def _is_link_card(element: HtmlElement) -> bool:
