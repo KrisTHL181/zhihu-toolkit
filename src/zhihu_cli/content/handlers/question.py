@@ -8,7 +8,7 @@ from datetime import datetime
 from typing import Any
 from urllib.parse import urlparse
 
-from zhihu_cli.content.handlers import fmt_time
+from zhihu_cli.content.handlers import fmt_time, safe_json
 from zhihu_cli.content.handlers.requests import fetch_json, fetch_page_html, get_page_state, session
 from zhihu_cli.content.handlers.waterfall import stream_handler
 from zhihu_cli.content.utils.html2markdown import converter
@@ -201,7 +201,7 @@ def thank_answer(answer_id: str) -> dict[str, Any]:
 
 def unthank_answer(answer_id: str) -> dict[str, Any]:
     resp = session.delete(f"https://www.zhihu.com/api/v4/answers/{answer_id}/thankers")
-    return resp.json()
+    return safe_json(resp)
 
 
 def upvote_question(question_id: str) -> dict[str, Any]:
@@ -211,7 +211,7 @@ def upvote_question(question_id: str) -> dict[str, Any]:
 
 def unvote_question(question_id: str) -> dict[str, Any]:
     resp = session.delete(f"https://www.zhihu.com/api/v4/questions/{question_id}/voters")
-    return resp.json()
+    return safe_json(resp)
 
 
 def downvote_question(question_id: str) -> dict[str, Any]:  # undocumented endpoint!
@@ -226,7 +226,7 @@ def follow_question(question_id: str) -> dict[str, Any]:
 
 def unfollow_question(question_id: str) -> dict[str, Any]:
     resp = session.delete(f"https://www.zhihu.com/api/v4/questions/{question_id}/followers")
-    return resp.json()
+    return safe_json(resp)
 
 
 _ANSWER_PATH_RE = re.compile(r"/answer/(\d+)/?$")

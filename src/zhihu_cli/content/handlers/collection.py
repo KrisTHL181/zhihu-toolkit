@@ -3,18 +3,9 @@ from __future__ import annotations
 from collections.abc import Iterable
 from typing import Any
 
+from zhihu_cli.content.handlers import safe_json as _safe_json
 from zhihu_cli.content.handlers.requests import session
 from zhihu_cli.content.handlers.waterfall import PAGE_SIZE
-
-
-def _safe_json(resp) -> dict[str, Any]:
-    """Parse JSON response, returning an error dict for non-JSON bodies."""
-    if not resp.text.strip():
-        return {"success": resp.ok, "status_code": resp.status_code}
-    try:
-        return resp.json()
-    except Exception:
-        return {"error": True, "status_code": resp.status_code, "message": resp.text[:200]}
 
 
 def collect(item_type: str, item_id: str) -> dict[str, Any]:

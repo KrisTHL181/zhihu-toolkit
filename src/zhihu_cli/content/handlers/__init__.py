@@ -1,8 +1,14 @@
+from __future__ import annotations
+
 import re
 from datetime import datetime
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 from zhihu_cli.paths import zhihu_home
+
+if TYPE_CHECKING:
+    from typing import Any
 
 USER_AGENT_FILE = zhihu_home() / "user-agent"
 
@@ -104,3 +110,24 @@ def fmt_time(ts: int | float | None) -> str:
         except Exception:
             return str(ts)
     return "unknown time"
+
+
+def safe_json(resp) -> Any:
+    """Parse a JSON response body without raising on an empty or non-JSON one.
+
+    Zhihu's write endpoints (follow, vote, thank, block, …) answer a
+    successful DELETE with ``204 No Content`` and no body at all, so a bare
+    ``resp.json()`` would fail with ``JSONDecodeError`` even though the
+    action succeeded.
+
+    :param resp: A response object returned by :class:`ZhihuSession`.
+    :returns: The decoded JSON value, ``{"success": resp.ok, "status_code":
+        ...}`` when the body is empty, or an ``error`` dict when the body is
+        neither empty nor JSON.
+    """
+    if not resp.text.strip():
+        return {"success": resp.ok, "status_code": resp.status_code}
+    try:
+        return resp.json()
+    except Exception:
+        return {"error": True, "status_code": resp.status_code, "message": resp.text[:200]}

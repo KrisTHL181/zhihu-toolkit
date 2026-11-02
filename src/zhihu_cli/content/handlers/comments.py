@@ -1,7 +1,7 @@
 from collections.abc import Iterable, Iterator
 from typing import Any
 
-from zhihu_cli.content.handlers import fmt_time
+from zhihu_cli.content.handlers import fmt_time, safe_json
 from zhihu_cli.content.handlers.requests import session
 from zhihu_cli.content.handlers.waterfall import PAGE_SIZE, stream_handler
 from zhihu_cli.content.utils import markdown2html
@@ -281,7 +281,8 @@ def comment_item(item_type: str, item_id: str, content: str, reply_comment_id: s
 
 def delete_comment(comment_id: str) -> None:
     resp = session.delete(f"https://www.zhihu.com/api/v4/comment_v5/comment/{comment_id}")
-    if not resp.json()["success"]:
+    data = safe_json(resp)
+    if not isinstance(data, dict) or not data.get("success"):
         raise RuntimeError(f"Failed to delete comment {comment_id}")
 
 
@@ -292,7 +293,7 @@ def like_comment(comment_id: str) -> dict[str, Any]:
     :returns: API response dict.
     """
     resp = session.post(f"https://www.zhihu.com/api/v4/comments/{comment_id}/like")
-    return resp.json()
+    return safe_json(resp)
 
 
 def dislike_comment(comment_id: str) -> dict[str, Any]:
@@ -302,7 +303,7 @@ def dislike_comment(comment_id: str) -> dict[str, Any]:
     :returns: API response dict.
     """
     resp = session.put(f"https://www.zhihu.com/api/v4/comment_v5/comment/{comment_id}/reaction/dislike")
-    return resp.json()
+    return safe_json(resp)
 
 
 def cancel_like_comment(comment_id: str) -> dict[str, Any]:
@@ -312,7 +313,7 @@ def cancel_like_comment(comment_id: str) -> dict[str, Any]:
     :returns: API response dict.
     """
     resp = session.delete(f"https://www.zhihu.com/api/v4/comments/{comment_id}/like")
-    return resp.json()
+    return safe_json(resp)
 
 
 def cancel_dislike_comment(comment_id: str) -> dict[str, Any]:
@@ -322,4 +323,4 @@ def cancel_dislike_comment(comment_id: str) -> dict[str, Any]:
     :returns: API response dict.
     """
     resp = session.delete(f"https://www.zhihu.com/api/v4/comment_v5/comment/{comment_id}/reaction/dislike")
-    return resp.json()
+    return safe_json(resp)

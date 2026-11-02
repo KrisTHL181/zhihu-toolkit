@@ -5,7 +5,7 @@ import re
 from collections.abc import Iterable
 from typing import Any
 
-from zhihu_cli.content.handlers import fmt_time
+from zhihu_cli.content.handlers import fmt_time, safe_json
 from zhihu_cli.content.handlers.requests import session
 from zhihu_cli.content.handlers.waterfall import PAGE_SIZE, stream_handler
 
@@ -15,8 +15,8 @@ MEMBER_API = "https://www.zhihu.com/api/v4/members/{token}"
 def follow(user_id: str) -> dict[str, Any]:
     resp = session.post(f"https://www.zhihu.com/api/v4/members/{user_id}/followers")
 
-    data = resp.json()
-    if resp.status_code == 403 and "error" in data.keys():
+    data = safe_json(resp)
+    if resp.status_code == 403 and isinstance(data, dict) and "error" in data:
         raise PermissionError(f"Failed to follow: {data['error']['message']}")
 
     return data
@@ -24,7 +24,7 @@ def follow(user_id: str) -> dict[str, Any]:
 
 def unfollow(user_id: str) -> dict[str, Any]:
     resp = session.delete(f"https://www.zhihu.com/api/v4/members/{user_id}/followers")
-    return resp.json()
+    return safe_json(resp)
 
 
 def block(user_id: str) -> None:
