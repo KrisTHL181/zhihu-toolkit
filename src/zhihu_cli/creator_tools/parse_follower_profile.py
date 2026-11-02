@@ -7,8 +7,7 @@ import os
 from datetime import datetime
 from typing import Any
 
-from zhihu_cli.content.handlers.cache_manager import cache_manager
-from zhihu_cli.content.handlers.requests import session
+from zhihu_cli.content.handlers.requests import fetch_json
 from zhihu_cli.output import (
     error,
     f_label,
@@ -149,17 +148,10 @@ def _content_rows(items: list[dict[str, Any]], limit: int = 5) -> list[list[str]
 
 def run_task() -> None:
     """Fetch the follower profile, persist it to JSON, and render a styled report."""
-    headers = cache_manager.load_headers()
-    if not headers:
-        error("No cached headers found. Run: zhihu auth paste")
-        return
-
     info("Fetching follower profile ...")
 
     try:
-        resp = session.get(PROFILE_URL, timeout=15)
-        resp.raise_for_status()
-        data: dict[str, Any] = resp.json()
+        data: dict[str, Any] = fetch_json(PROFILE_URL, timeout=15)
     except Exception as e:
         error(f"Error fetching follower profile: {e}")
         return

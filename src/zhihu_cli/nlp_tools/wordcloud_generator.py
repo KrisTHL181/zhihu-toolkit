@@ -1,16 +1,23 @@
+"""Generate a word cloud from downloaded Zhihu Markdown files."""
+
+from __future__ import annotations
+
 import argparse
-import json
 import os
-import re
 from pathlib import Path
 
 import jieba
 import jieba.analyse
 import matplotlib.pyplot as plt
-import yaml
 from wordcloud import WordCloud
 
 from zhihu_cli.content.handlers.cache_manager import cache_manager
+from zhihu_cli.content.utils.text_clean import (
+    extract_cjk,
+    parse_frontmatter,
+    strip_markdown_noise,
+    strip_yaml_frontmatter,
+)
 from zhihu_cli.nlp_tools import FONT_PATH, STOP_WORDS
 from zhihu_cli.paths import zhihu_home
 
@@ -22,40 +29,39 @@ def extract_text_from_md(file_path: str, skip_metadata: bool = False) -> str:
     """Extract metadata and body text from a Markdown file.
 
     Compatible with YAML frontmatter (current) and legacy JSON-line format.
+
+    :param file_path: Path to the Markdown file.
+    :param skip_metadata: When true, prepend the question metadata and drop the
+        frontmatter block; otherwise return the file unchanged.
+    :returns: The text to analyse, or an empty string on read failure.
     """
     try:
         with open(file_path, encoding="utf-8") as f:
             content = f.read()
-
-            if not skip_metadata:
-                return content
-
-            parts = content.split("---", 2)
-            text_to_analyze = ""
-
-            # Try to extract metadata from frontmatter (YAML or legacy JSON)
-            if len(parts) >= 2:
-                frontmatter = parts[1] if parts[0].strip() == "" else parts[0]
-                try:
-                    meta = yaml.safe_load(frontmatter)
-                    if isinstance(meta, dict):
-                        text_to_analyze += meta.get("question_name", "") + " "
-                        text_to_analyze += meta.get("question_detail", "") + " "
-                except yaml.YAMLError:
-                    try:
-                        meta = json.loads(parts[0])
-                        text_to_analyze += meta.get("question_name", "") + " "
-                        text_to_analyze += meta.get("question_detail", "") + " "
-                    except json.JSONDecodeError:
-                        pass
-
-            # Body is always the last segment
-            text_to_analyze += parts[-1]
-
-            return text_to_analyze
     except Exception as e:
         print(f"Read failed {file_path}: {e}")
         return ""
+
+    if not skip_metadata:
+        return content
+
+    text_to_analyze = ""
+    if "---" in content:
+        meta = parse_frontmatter(content)
+        if meta:
+            text_to_analyze += meta.get("question_name", "") + " "
+            text_to_analyze += meta.get("question_detail", "") + " "
+
+    # Body is always the last segment. For current YAML files the helper strips
+    # the frontmatter; for legacy JSON-line files (and plain files with a
+    # ``---`` separator) fall back to the historical split so the body matches
+    # the previous behaviour.
+    body = strip_yaml_frontmatter(content)
+    if body == content and "---" in content:
+        body = content.split("---", 2)[-1]
+    text_to_analyze += body
+
+    return text_to_analyze
 
 
 def is_stop_word(word: str) -> bool:
@@ -78,11 +84,7 @@ def main(topk_words: int = 200, source_dir: str | None = None, only_print: bool 
     text = " ".join(all_text)
 
     # Clean special chars, code blocks, etc.
-    text = re.sub(r"\$\$.*?\$\$", "", text, flags=re.DOTALL)
-    text = re.sub(r"\$.*?\$", "", text)
-    text = re.sub(r"```.*?```", "", text, flags=re.DOTALL)
-    text = re.sub(r"<.*?>", "", text)
-    full_content = re.sub(r"[^一-龥]", "", text)
+    full_content = extract_cjk(strip_markdown_noise(text))
 
     keywords_raw = jieba.analyse.extract_tags(
         full_content,

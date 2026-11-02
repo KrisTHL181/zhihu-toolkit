@@ -311,6 +311,7 @@ def scrape_answer_page(answer_url: str, raw: bool = False) -> tuple[dict[str, An
     :param answer_url: full URL to a Zhihu answer page, or a bare answer ID.
     :param raw: when True, return raw HTML instead of converting to Markdown.
     :returns: (metadata, content) — content is Markdown by default, raw HTML if ``raw=True``.
+        The metadata also carries ``question_detail``, the question body converted to Markdown.
     """
     entities = _fetch_answer_entities(answer_url)
     answer_data = next(iter(entities["answers"].values()))
@@ -350,6 +351,7 @@ def scrape_answer_page(answer_url: str, raw: bool = False) -> tuple[dict[str, An
         "created": created_date,
         "created_time": fmt_time(created_ts),
         "updated_time": fmt_time(updated_ts),
+        "question_detail": converter.convert(question_data.get("detail", "")),
     }
 
     content_html = answer_data.get("content", "")

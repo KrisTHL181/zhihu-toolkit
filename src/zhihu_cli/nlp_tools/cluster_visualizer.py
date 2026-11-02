@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import argparse
 import os
-import re
 from pathlib import Path
 from typing import Any, Literal
 
@@ -10,13 +9,18 @@ import jieba
 import numpy as np
 import pandas as pd
 import plotly.express as px
-import yaml
 from sklearn.cluster import KMeans
 from sklearn.decomposition import PCA
 from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.manifold import TSNE
 from sklearn.metrics import silhouette_score
 
+from zhihu_cli.content.utils.text_clean import (
+    extract_cjk,
+    parse_frontmatter,
+    strip_markdown_noise,
+    strip_yaml_frontmatter,
+)
 from zhihu_cli.nlp_tools import STOP_WORDS as stop_words
 from zhihu_cli.paths import zhihu_home
 
@@ -73,14 +77,11 @@ def _extract_document_text(content: str) -> str | None:
     :param content: Raw markdown file content.
     :returns: Space-joined tokenized text, or ``None``.
     """
-    parts = content.split("---", 2)
-    text = parts[-1] if len(parts) > 1 else parts[0]
-
-    text = re.sub(r"\$\$.*?\$\$", "", text, flags=re.DOTALL)
-    text = re.sub(r"\$.*?\$", "", text)
-    text = re.sub(r"```.*?```", "", text, flags=re.DOTALL)
-    text = re.sub(r"<.*?>", "", text)
-    text = "".join(re.findall(r"[一-龥a-zA-Z0-9]+", text))
+    text = strip_yaml_frontmatter(content)
+    if text == content and "---" in content:
+        # Legacy JSON-line files (and plain files with a ``---`` separator).
+        text = content.split("---", 2)[-1]
+    text = extract_cjk(strip_markdown_noise(text), keep_latin=True)
 
     words = jieba.cut(text)
     cleaned = " ".join(w for w in words if len(w) > 1 and w not in stop_words)
@@ -96,14 +97,9 @@ def _extract_document_title(content: str, filename: str) -> str:
     :returns: The document title.
     """
     short_name = filename.replace(".md", "")
-    parts = content.split("---", 2)
-    if len(parts) > 2:
-        try:
-            meta = yaml.safe_load(parts[1])
-            if isinstance(meta, dict) and meta.get("title"):
-                short_name = meta["title"]
-        except yaml.YAMLError:
-            pass
+    title = parse_frontmatter(content).get("title")
+    if title:
+        short_name = title
     return short_name
 
 

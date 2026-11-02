@@ -6,9 +6,10 @@ import json
 import os
 from datetime import datetime, timedelta
 from typing import Any
+from urllib.parse import urlencode
 
 from zhihu_cli.content.handlers.cache_manager import cache_manager
-from zhihu_cli.content.handlers.requests import session
+from zhihu_cli.content.handlers.waterfall import stream_handler
 from zhihu_cli.content.utils.wait import wait
 from zhihu_cli.paths import zhihu_home
 
@@ -25,10 +26,9 @@ def _fetch_batch(
     order_sort: str,
 ) -> list[dict[str, Any]]:
     """Fetch all pages for a single date range batch."""
-    items: list[dict[str, Any]] = []
-    page = 1
+    state = {"page": 1}
 
-    while True:
+    def batch_url(page: int) -> str:
         params = {
             "start_date": start_date,
             "end_date": end_date,
@@ -37,47 +37,38 @@ def _fetch_batch(
             "page": page,
             "page_size": PAGE_SIZE,
         }
+        return f"{RANGE_URL}?{urlencode(params)}"
 
-        print(f"    page={page}...", end=" ")
-
-        resp = session.get(RANGE_URL, params=params, timeout=15)
-        resp.raise_for_status()
-        data = resp.json()
-
+    def parse_items(data: dict[str, Any]):
         batch_items = data.get("data", [])
-        total = data.get("total", 0)
-
         if not batch_items:
-            print("no more data")
-            break
-
+            return
         for item in batch_items:
-            items.append(
-                {
-                    "content_id": item["content_id"],
-                    "content_token": item.get("content_token", ""),
-                    "content_title": item["content_title"],
-                    "content_type": item["content_type"],
-                    "content_publish_at": item.get("content_publish_at", 0),
-                    "content_publish_date": item.get("content_publish_date", ""),
-                    "current_read": item.get("current_read", 0),
-                    "current_interaction": item.get("current_interaction", 0),
-                    "current_income": item.get("current_income", 0),
-                    "total_read": item.get("total_read", 0),
-                    "total_interaction": item.get("total_interaction", 0),
-                    "total_income": item.get("total_income", 0),
-                }
-            )
+            yield {
+                "content_id": item["content_id"],
+                "content_token": item.get("content_token", ""),
+                "content_title": item["content_title"],
+                "content_type": item["content_type"],
+                "content_publish_at": item.get("content_publish_at", 0),
+                "content_publish_date": item.get("content_publish_date", ""),
+                "current_read": item.get("current_read", 0),
+                "current_interaction": item.get("current_interaction", 0),
+                "current_income": item.get("current_income", 0),
+                "total_read": item.get("total_read", 0),
+                "total_interaction": item.get("total_interaction", 0),
+                "total_income": item.get("total_income", 0),
+            }
+        print(f"got {len(batch_items)} items (total={data.get('total', 0)})")
 
-        print(f"got {len(batch_items)} items (total={total})")
+    def extract_next(data: dict[str, Any]) -> str | None:
+        if not data.get("data"):
+            return None
+        if state["page"] * PAGE_SIZE >= data.get("total", 0):
+            return None
+        state["page"] += 1
+        return batch_url(state["page"])
 
-        if page * PAGE_SIZE >= total:
-            break
-
-        page += 1
-        wait(1.0)
-
-    return items
+    return list(stream_handler(batch_url(1), parse_items, extract_next))
 
 
 def run_task(
@@ -87,11 +78,6 @@ def run_task(
     order_sort: str = "desc",
     json_output: bool = False,
 ) -> None:
-    headers = cache_manager.load_headers()
-    if not headers:
-        print("No cached headers found. Run: zhihu auth paste")
-        return
-
     yesterday = datetime.now() - timedelta(days=1)
     if end_date is None:
         end_date = yesterday.strftime("%Y-%m-%d")

@@ -7,46 +7,19 @@ markup noise while preserving Chinese + English characters for BERT.
 
 from __future__ import annotations
 
-import re
+from zhihu_cli.content.utils.text_clean import (
+    clean_excerpt,
+    clean_text,
+    strip_yaml_frontmatter,
+)
 
-
-def strip_yaml_frontmatter(text: str) -> str:
-    """Remove YAML frontmatter delimited by ``---...---``."""
-    if text.startswith("---"):
-        idx = text.find("---", 3)
-        if idx != -1:
-            return text[idx + 3 :]
-    return text
-
-
-def clean_text(text: str) -> str:
-    """Clean article text for BERT input.
-
-    Pipeline: strip YAML → remove LaTeX → remove code blocks →
-    remove HTML tags → remove markdown image/ref syntax → collapse whitespace.
-    """
-    text = strip_yaml_frontmatter(text)
-    # Remove display math: $$...$$
-    text = re.sub(r"\$\$.*?\$\$", "", text, flags=re.DOTALL)
-    # Remove inline math: $...$
-    text = re.sub(r"\$.*?\$", "", text)
-    # Remove code blocks
-    text = re.sub(r"```.*?```", "", text, flags=re.DOTALL)
-    # Remove HTML tags
-    text = re.sub(r"<[^>]+>", "", text)
-    # Remove markdown images, keep link text
-    text = re.sub(r"!\[.*?\]\(.*?\)", "", text)
-    text = re.sub(r"\[([^\]]*)\]\(.*?\)", r"\1", text)
-    # Collapse whitespace
-    text = re.sub(r"\s+", " ", text).strip()
-    return text
-
-
-def clean_excerpt(text: str) -> str:
-    """Light cleaning for API excerpt text (already plain text, just strip markup)."""
-    text = re.sub(r"<em>|</em>", "", text)
-    text = re.sub(r"http\S+", "", text)
-    return text.strip()
+__all__ = [
+    "strip_yaml_frontmatter",
+    "clean_text",
+    "clean_excerpt",
+    "prepare_for_bert",
+    "prepare_bert_from_article_dict",
+]
 
 
 def prepare_for_bert(

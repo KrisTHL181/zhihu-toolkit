@@ -151,7 +151,13 @@ def _zhihu_error_detail(response: Any) -> str | None:
     return detail
 
 
-def fetch_json(url: str) -> Any:
+def fetch_json(
+    url: str,
+    *,
+    params: dict[str, Any] | None = None,
+    headers: dict[str, str] | None = None,
+    timeout: float | None = None,
+) -> Any:
     """Fetch a URL and decode its JSON response.
 
     When Zhihu returns a non-2xx error envelope, its ``code``/``name``/
@@ -159,13 +165,27 @@ def fetch_json(url: str) -> Any:
     the request failed instead of only the status code.
 
     :param url: Target URL.
+    :param params: Optional query parameters.  Omitted from the request when
+        ``None``.
+    :param headers: Optional extra request headers.  Omitted from the request
+        when ``None``.
+    :param timeout: Optional request timeout in seconds.  Omitted from the
+        request when ``None``, leaving the session's default in effect.
     :returns: The decoded JSON payload.
     :raises ZhihuGateError: If the response is a login/verification gate
         (``40353`` with ``need_login``), the ``__zse_ck`` challenge, or a
         risk-control refusal (``40352``/``40362``).
     :raises: The session's HTTP error for any other non-2xx response.
     """
-    response = _check_auth_expired(_get_session().get(url))
+    kwargs: dict[str, Any] = {}
+    if params is not None:
+        kwargs["params"] = params
+    if headers is not None:
+        kwargs["headers"] = headers
+    if timeout is not None:
+        kwargs["timeout"] = timeout
+
+    response = _check_auth_expired(_get_session().get(url, **kwargs))
     gate = detect_gate(response, url)
     if gate is not None:
         raise gate

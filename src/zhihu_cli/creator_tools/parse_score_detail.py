@@ -9,7 +9,7 @@ from datetime import datetime, timedelta
 from typing import Any
 
 from zhihu_cli.content.handlers.cache_manager import cache_manager
-from zhihu_cli.content.handlers.requests import session
+from zhihu_cli.content.handlers.requests import fetch_json
 from zhihu_cli.content.handlers.waterfall import stream_handler
 from zhihu_cli.paths import zhihu_home
 
@@ -51,18 +51,13 @@ def run_task() -> None:
         print(f"Data is already up to date (last record: {start_date}), no update needed.")
         return
 
-    headers = cache_manager.load_headers()
-    if not headers:
-        print("No cached headers found. Run: zhihu auth paste")
-        return
-
     print(f"--- Fetching creator score detail from {start_date} ---")
 
     start_ts = _date_to_ts(start_date)
     end_ts = _date_to_ts(today_str, end_of_day=True)
 
     limit = 20
-    initial_url = f"{SCORE_URL}?start_at={start_ts}&end_at={end_ts}&limit={limit}&offset=0"
+    initial_url = f"{SCORE_URL}?start_at={start_ts}&end_at={end_ts}"
 
     def parse_score_detail(data: dict[str, Any]) -> Iterable[dict[str, Any]]:
         for item in data.get("data", {}).get("detail", []):
@@ -89,19 +84,16 @@ def run_task() -> None:
     new_records: list[dict[str, Any]] = []
     data_updated_at: str | None = None
     try:
-        for item in stream_handler(initial_url, parse_score_detail, extract_next):
+        for item in stream_handler(initial_url, parse_score_detail, extract_next, limit=limit):
             new_records.append(item)
         print(f"  Fetched {len(new_records)} records")
 
         # Also fetch first page to get updated_at
-        first_resp = session.get(
+        first_data = fetch_json(
             f"{SCORE_URL}?start_at={start_ts}&end_at={end_ts}&limit=1&offset=0",
-            headers=headers,
             timeout=15,
         )
-        if first_resp.status_code == 200:
-            first_data = first_resp.json()
-            data_updated_at = first_data.get("data", {}).get("updated_at")
+        data_updated_at = first_data.get("data", {}).get("updated_at")
     except Exception as e:
         print(f"error: {e}")
 

@@ -1,3 +1,7 @@
+"""Fetch and persist per-day creator metrics (CSV export) from Zhihu API."""
+
+from __future__ import annotations
+
 import csv
 import json
 import os
@@ -39,12 +43,6 @@ def run_task() -> None:
         print(f"Data is already up to date (last record: {start_dt - timedelta(days=1)}), no update needed.")
         return
 
-    headers = cache_manager.load_headers()
-    if not headers:
-        print("No cached headers found. Run: zhihu auth paste")
-        return
-    headers = {k: v for k, v in headers.items() if k.lower() != "accept-encoding"}
-
     print(f"--- Incremental mode: fetching from {start_dt.strftime('%Y-%m-%d')} ---")
 
     new_records: list[dict[str, Any]] = []
@@ -66,7 +64,7 @@ def run_task() -> None:
         print(f"\n[Task] Fetching: {params['start']} -> {params['end']}")
 
         try:
-            resp = session.get(DAILY_URL, headers=headers, params=params, timeout=15)
+            resp = session.get(DAILY_URL, params=params, timeout=15)
 
             if resp.status_code == 200 and resp.text.strip():
                 f = StringIO(resp.text.strip())

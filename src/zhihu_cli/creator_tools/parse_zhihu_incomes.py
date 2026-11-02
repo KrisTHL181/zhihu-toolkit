@@ -40,12 +40,6 @@ def run_task() -> None:
         print(f"Data is already up to date (last record: {start_dt - timedelta(days=1)}), no update needed.")
         return
 
-    headers = cache_manager.load_headers()
-    if not headers:
-        print("No cached headers found. Run: zhihu auth paste")
-        return
-    headers = {k: v for k, v in headers.items() if k.lower() != "accept-encoding"}
-
     print(f"--- Incremental mode: fetching from {start_dt.strftime('%Y-%m-%d')} ---")
 
     new_income_data = []
@@ -62,7 +56,7 @@ def run_task() -> None:
         print(f"\n[Task] Fetching: {params['start_date']} -> {params['end_date']}")
 
         try:
-            resp = session.get(BASE_URL, headers=headers, params=params, timeout=15)
+            resp = session.get(BASE_URL, params=params, timeout=15)
 
             if resp.status_code == 200 and resp.text.strip():
                 f = StringIO(resp.text.strip())

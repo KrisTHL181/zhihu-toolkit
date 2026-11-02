@@ -8,6 +8,9 @@ from typing import Any
 from zhihu_cli.content.handlers import get_type_and_id
 from zhihu_cli.content.handlers.requests import fetch_page_html, get_page_state, session
 
+CREATOR_CONTENT_AGGR_URL = "https://www.zhihu.com/api/v4/creators/analysis/realtime/content/aggr"
+CREATOR_CONTENT_DAILY_URL = "https://www.zhihu.com/api/v4/creators/analysis/realtime/content/daily"
+
 # Map entity keys (plural) → creator API type param (singular)
 _ENTITY_TO_CREATOR_TYPE = {"articles": "article", "answers": "answer", "pins": "pin"}
 
@@ -66,6 +69,43 @@ def _stats_for_answer(question_id: str, answer_id: str) -> dict[str, Any]:
     return stats
 
 
+def fetch_creator_content_metrics(
+    item_id: str,
+    creator_type: str,
+    *,
+    start: str | None = None,
+    end: str | None = None,
+    aggregated: bool = False,
+) -> dict[str, Any] | None:
+    """Fetch creator-side metrics for one piece of content.
+
+    The aggregated endpoint returns a single totals object, while the daily
+    endpoint returns a per-day list.  Only the authenticated content author can
+    read either one.
+
+    :param item_id: Creator token of the content (the answer/article/pin ID).
+    :param creator_type: Singular creator type: ``"answer"``, ``"article"`` or
+        ``"pin"``.
+    :param start: Optional start date (``YYYY-MM-DD``) for the daily endpoint.
+    :param end: Optional end date (``YYYY-MM-DD``) for the daily endpoint.
+    :param aggregated: When ``True`` query the aggregated endpoint, otherwise
+        the daily one.
+    :returns: The decoded JSON payload, or ``None`` when the API answers with a
+        non-200 status.
+    """
+    url = CREATOR_CONTENT_AGGR_URL if aggregated else CREATOR_CONTENT_DAILY_URL
+    params: dict[str, str] = {"type": creator_type, "token": item_id}
+    if start is not None:
+        params["start"] = start
+    if end is not None:
+        params["end"] = end
+
+    response = session.get(url, params=params, timeout=15)
+    if response.status_code != 200:
+        return None
+    return response.json()
+
+
 def _fetch_creator_aggr(entity_key: str, item_id: str) -> dict[str, Any] | None:
     """Fetch aggregated metrics from creator API.
 
@@ -76,14 +116,9 @@ def _fetch_creator_aggr(entity_key: str, item_id: str) -> dict[str, Any] | None:
     if not creator_type:
         return None
 
-    resp = session.get(
-        "https://www.zhihu.com/api/v4/creators/analysis/realtime/content/aggr",
-        params={"type": creator_type, "token": item_id},
-        timeout=15,
-    )
-    if resp.status_code != 200:
+    data = fetch_creator_content_metrics(item_id, creator_type, aggregated=True)
+    if data is None:
         return None
-    data = resp.json()
     return {
         "share": int(data.get("share", 0)),
         "pv": int(data.get("pv", 0)),

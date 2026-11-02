@@ -22,7 +22,6 @@ from typing import Any
 
 from zhihu_cli.content.download_contents import sanitize_filename, save_article
 from zhihu_cli.content.handlers.article import scrape_article
-from zhihu_cli.content.handlers.cache_manager import cache_manager
 from zhihu_cli.content.handlers.waterfall import stream_handler
 from zhihu_cli.content.universal_converter import convert_items
 from zhihu_cli.content.utils.llm_config import (
@@ -56,10 +55,6 @@ SERIAL_PAPERS_DIR = os.path.join(CRANK_DIR, "papers")
 
 def fetch_article_list(user_token: str) -> list[dict[str, Any]]:
     """Paginate through a user's articles API using the standard waterfall streamer."""
-    if not cache_manager.load_headers():
-        print("No cached headers. Run 'zhihu auth paste' first.", file=sys.stderr)
-        sys.exit(1)
-
     initial_url = ARTICLES_API.format(token=user_token) + "?offset=0&limit=20&sort_by=created"
 
     def parser(data: dict[str, Any]):

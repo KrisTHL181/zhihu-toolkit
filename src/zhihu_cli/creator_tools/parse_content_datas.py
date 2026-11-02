@@ -1,3 +1,7 @@
+"""Scan a creator's content and persist per-day or aggregated metrics."""
+
+from __future__ import annotations
+
 import json
 import os
 import sys
@@ -6,8 +10,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
-from zhihu_cli.content.handlers.cache_manager import cache_manager
-from zhihu_cli.content.handlers.requests import session
+from zhihu_cli.content.handlers.stats import fetch_creator_content_metrics
 from zhihu_cli.content.handlers.waterfall import stream_handler
 from zhihu_cli.content.utils.wait import wait
 from zhihu_cli.paths import zhihu_home
@@ -20,10 +23,6 @@ _orig_print = print
 def _cli_print(*args: object, **kwargs: object) -> None:
     """Print to stderr (avoids stdout pollution during --json mode)."""
     _orig_print(*args, file=sys.stderr, **kwargs)
-
-
-DAILY_URL: str = "https://www.zhihu.com/api/v4/creators/analysis/realtime/content/daily"
-AGGR_URL: str = "https://www.zhihu.com/api/v4/creators/analysis/realtime/content/aggr"
 
 
 def convert_percent(data: str | None) -> float:
@@ -52,10 +51,6 @@ def get_date(d: dict[str, Any]) -> str | None:
 
 def generate_assets_file(output_path: Path) -> list[dict[str, str]]:
     """Scrape all user creations and save to output_path. Returns the asset list."""
-    if not cache_manager.load_headers():
-        _cli_print("No cached headers found. Run: zhihu auth paste")
-        return []
-
     initial_url = (
         "https://www.zhihu.com/api/v4/creators/creations/v2/all"
         "?start=0&end=0&limit=20&offset=0&need_co_creation=1&sort_type=created"
@@ -186,33 +181,23 @@ def run_batch_daily_analysis(use_aggr: bool = False) -> None:
             _cli_print("  Then: zhihu tools creator metrics")
             return
 
-    headers = cache_manager.load_headers()
-    if not headers:
-        _cli_print("No cached headers found. Run: zhihu auth paste")
-        return
-    headers = {k: v for k, v in headers.items() if k.lower() != "accept-encoding"}
-
-    base_url = AGGR_URL if use_aggr else DAILY_URL
-
     success_count = 0
     for i, token in enumerate(answer_ids):
         _cli_print(f"\n[Task {i + 1}/{len(answer_ids)}] Processing ID: {token} ...")
 
         created_ts = token.get("created_time", 0)
         start_date = datetime.fromtimestamp(created_ts).strftime("%Y-%m-%d")
-        params = {
-            "type": token["type"],
-            "token": token["id"],
-            "start": start_date,
-            "end": datetime.now().strftime("%Y-%m-%d"),
-        }
 
         try:
-            resp = session.get(base_url, headers=headers, params=params, timeout=15)
+            data = fetch_creator_content_metrics(
+                token["id"],
+                token["type"],
+                start=start_date,
+                end=datetime.now().strftime("%Y-%m-%d"),
+                aggregated=use_aggr,
+            )
 
-            if resp.status_code == 200:
-                data = resp.json()
-
+            if data is not None:
                 if use_aggr:
                     # API returns per-day metrics inside yesterday/today,
                     # plus top-level answer metadata, content_mark, and advanced.
@@ -308,7 +293,7 @@ def run_batch_daily_analysis(use_aggr: bool = False) -> None:
                 _cli_print(f"  Saved: {output_file} ({entries_label} records)")
                 success_count += 1
             else:
-                _cli_print(f"  Fetch failed (Code: {resp.status_code})")
+                _cli_print("  Fetch failed (non-200 response)")
 
         except Exception as e:
             _cli_print(f"  Exception: {e}")

@@ -8,9 +8,11 @@ import sys
 from datetime import datetime
 from urllib.parse import urlparse
 
-from zhihu_cli.content.handlers.article import fetch_article_item
+from zhihu_cli.content.handlers.article import fetch_article_item, parse_article_metadata
 from zhihu_cli.content.handlers.cache_manager import cache_manager
-from zhihu_cli.content.handlers.requests import fetch_page_html, get_page_state, reload_session, session
+from zhihu_cli.content.handlers.pin import scrape_pin
+from zhihu_cli.content.handlers.question import scrape_answer_page
+from zhihu_cli.content.handlers.requests import reload_session, session
 from zhihu_cli.content.utils.html2markdown import PageToMarkdown
 from zhihu_cli.content.utils.wait import wait
 from zhihu_cli.daemon.proxy import DaemonHTTPError
@@ -169,12 +171,12 @@ def extract_metadata_from_html(html_content: str) -> dict[str, str]:
     if match:
         raw_title = match.group(1) or match.group(2)
         clean_title = html.unescape(raw_title).strip()
-        metadata["title"] = clean_title.replace("/", "_")
+        metadata["title"] = sanitize_filename(clean_title)
 
     # Extract author
     author_match = re.search(r'<a[^>]*class="[^"]*UserLink-link[^"]*"[^>]*>([^<]+)</a>', html_content)
     if author_match:
-        metadata["author"] = html.unescape(author_match.group(1)).strip().replace("/", "_")
+        metadata["author"] = sanitize_filename(author_match.group(1))
 
     # Extract publish time from <meta itemprop="datePublished">
     created_match = re.search(r'<meta\s+itemProp="datePublished"\s+content="([^"]+)"', html_content)
@@ -325,49 +327,6 @@ def save_pin(url: str, metadata: dict[str, str], markdown: str, output_dir: str,
     return filepath
 
 
-def _resolve_author(question_data: dict, answer_data: dict, users: dict[str, dict]) -> str:
-    """Resolve author name from entity data (answer > question > users).
-
-    The answer author is checked first: the question entity carries its own
-    ``author`` (the asker), so preferring it would label an answer with the
-    name of whoever asked the question.
-    """
-    # Try answer author as dict
-    ans_author = answer_data.get("author", "")
-    if isinstance(ans_author, dict) and ans_author.get("name"):
-        return ans_author["name"]
-
-    # Try answer author as string (user ID reference)
-    if isinstance(ans_author, str):
-        user = users.get(ans_author)
-        if isinstance(user, dict) and user.get("name"):
-            return user["name"]
-
-    # Fall back to question author
-    author = question_data.get("author", {})
-    if isinstance(author, dict) and author.get("name"):
-        return author["name"]
-
-    return "unknown"
-
-
-def _resolve_created(answer_data: dict, question_data: dict) -> str:
-    """Resolve created date from entity timestamps (answer > question)."""
-    created_ts = answer_data.get("created_time") or answer_data.get("created") or answer_data.get("createdTime")
-    if not created_ts:
-        created_ts = question_data.get("created")
-
-    if created_ts:
-        try:
-            if isinstance(created_ts, (int, float)) and created_ts > 1e12:
-                created_ts = created_ts / 1000
-            return datetime.fromtimestamp(created_ts).strftime("%Y-%m-%d")
-        except (ValueError, OSError):
-            pass
-
-    return "unknown"
-
-
 class ContentDownloader:
     """Zhihu content downloader."""
 
@@ -423,35 +382,21 @@ class ContentDownloader:
 
         for url in urls:
             try:
-                html_content = fetch_page_html(url)
-
-                page_data = get_page_state(html_content)
-                question_data = page_data["questions"][next(iter(page_data["questions"]))]
-                answer_data = page_data["answers"][next(iter(page_data["answers"]))]
-
-                question_title = question_data["title"]
-                question_detail = self.md_converter.convert(question_data.get("detail", ""))
-
-                author = _resolve_author(question_data, answer_data, page_data.get("users", {}))
-
-                # Created: prefer entity timestamps
-                created = _resolve_created(answer_data, question_data)
-
-                answer_markdown = self.md_converter.convert(answer_data["content"], url)
+                metadata, answer_markdown = scrape_answer_page(url)
 
                 meta = {
-                    "title": question_title,
-                    "question_detail": question_detail,
-                    "author": author,
-                    "created": created,
+                    "title": metadata.get("title", "untitled"),
+                    "question_detail": metadata.get("question_detail", ""),
+                    "author": metadata.get("author", "unknown"),
+                    "created": metadata.get("created", "unknown"),
                 }
                 filepath = save_article(url, meta, answer_markdown, self.output_dir, with_media=self.with_media)
 
                 results.append(
                     {
                         "url": url,
-                        "title": question_title,
-                        "author": author,
+                        "title": meta["title"],
+                        "author": meta["author"],
                         "filepath": filepath,
                         "success": True,
                         "error": None,
@@ -460,9 +405,9 @@ class ContentDownloader:
 
                 _cli_print(f"[Success] {url}")
                 _cli_print(f"  -> {filepath}")
-                _cli_print(f"  Question: {question_title}")
-                _cli_print(f"  Author: {author}")
-                _cli_print(f"  Time: {created}")
+                _cli_print(f"  Question: {meta['title']}")
+                _cli_print(f"  Author: {meta['author']}")
+                _cli_print(f"  Time: {meta['created']}")
 
             except TimeoutError:
                 results.append(
@@ -499,30 +444,22 @@ class ContentDownloader:
         if not self.headers:
             raise RuntimeError("Headers not loaded")
         article = fetch_article_item(url)
+        metadata = parse_article_metadata(article)
 
         # ── metadata from structured entity data ──────────────
-        title = article.get("title", "untitled")
-        title = html.unescape(title).strip().replace("/", "_")
-
-        author_info = article.get("author", {}) or {}
-        author = author_info.get("name", "unknown")
-        author = html.unescape(author).strip().replace("/", "_")
+        title = sanitize_filename(metadata["title"])
+        author = sanitize_filename(metadata["author"]["name"])
 
         created = ""
-        created_ts = article.get("created")
-        if created_ts:
-            try:
-                if isinstance(created_ts, (int, float)) and created_ts > 1e12:
-                    created_ts = created_ts / 1000
-                created = datetime.fromtimestamp(created_ts).strftime("%Y-%m-%d")
-            except (ValueError, OSError):
-                pass
+        created_time = metadata.get("created_time", "")
+        if created_time and created_time[0].isdigit():
+            created = created_time[:10]
 
-        metadata = {"title": title, "author": author, "created": created}
+        meta = {"title": title, "author": author, "created": created}
 
         content_html = article.get("content", "")
         markdown_content = self.md_converter.convert(content_html, url)
-        return metadata, markdown_content
+        return meta, markdown_content
 
     def download_articles(self, urls: list[str], delay: float = 1.0) -> list[dict]:
         """Download article pages and convert to Markdown.
@@ -587,100 +524,6 @@ class ContentDownloader:
 
         return results
 
-    def _process_pin_part(self, part: dict, url: str) -> str | None:
-        """Process a single pin content part and return a markdown line.
-
-        Handles text, image, and video part types. Returns ``None`` when the
-        part cannot be converted (unsupported type, empty content, etc.).
-
-        :param part: A pin content part dictionary with a ``type`` key.
-        :param url: The pin URL (passed to the markdown converter).
-        :returns: A markdown string, or ``None``.
-        """
-        part_type = part.get("type")
-
-        if part_type == "text":
-            html_fragment = part.get("content", "")
-            if not html_fragment:
-                return None
-            md = self.md_converter.convert(html_fragment, url)
-            return md if md else None
-
-        if part_type == "image":
-            img_url = part.get("url", "")
-            if not img_url:
-                return None
-            alt = part.get("alt", "image")
-            return f"![{alt}]({img_url})"
-
-        if part_type == "video":
-            video_url = part.get("url", "")
-            if not video_url:
-                return None
-            return f"[video]({video_url})"
-
-        return None
-
-    def _process_single_pin(self, html_content: str, url: str) -> tuple[str, dict] | None:
-        """Process a single pin HTML page and return ``(filepath, metadata)``.
-
-        :param html_content: The raw HTML of the pin page.
-        :param url: The pin URL.
-        :returns: A tuple of ``(filepath, metadata_dict)`` on success, or ``None``
-            if the page contains no valid pin data.
-        """
-        try:
-            entities = get_page_state(html_content)
-        except ValueError as e:
-            _cli_print(f"[Error] {e} in {url}")
-            return None
-
-        pins = entities.get("pins", {})
-        if not pins:
-            _cli_print(f"[Error] No pin data found in {url}")
-            return None
-
-        pin_id = next(iter(pins.keys()))
-        pin = pins[pin_id]
-
-        users = entities.get("users", {})
-        author_id = pin.get("author")
-        author_name = "unknown"
-        if author_id and author_id in users:
-            author_name = users[author_id].get("name", "unknown")
-
-        created_ts = pin.get("created")
-        if created_ts:
-            created_date = datetime.fromtimestamp(created_ts).strftime("%Y-%m-%d")
-        else:
-            created_date = "unknown"
-
-        ip_info = pin.get("ipInfo", "")
-
-        content_parts = pin.get("content", [])
-        markdown_lines = []
-
-        for part in content_parts:
-            md = self._process_pin_part(part, url)
-            if md:
-                markdown_lines.append(md)
-
-        if not markdown_lines and pin.get("contentHtml"):
-            markdown_lines.append(self.md_converter.convert(pin["contentHtml"], url))
-
-        markdown_content = "\n\n".join(markdown_lines).strip()
-        if not markdown_content:
-            markdown_content = "(no content)"
-
-        meta = {
-            "author": author_name,
-            "created": created_date,
-            "ip": ip_info,
-            "pin_id": pin_id,
-        }
-        filepath = save_pin(url, meta, markdown_content, self.output_dir, with_media=self.with_media)
-        return filepath, meta
-
     def download_pins(self, urls: list[str], delay: float = 1.0) -> None:
         """Download pin pages and convert to Markdown."""
         if not self.headers:
@@ -689,8 +532,7 @@ class ContentDownloader:
 
         for url in urls:
             try:
-                html_content = fetch_page_html(url)
-                result = self._process_single_pin(html_content, url)
+                metadata, markdown_content = scrape_pin(url)
             except TimeoutError:
                 _cli_print(f"[Timeout] {url}")
                 continue
@@ -698,10 +540,21 @@ class ContentDownloader:
                 _cli_print(f"[Error] Failed to process {url}: {e}")
                 continue
 
-            if result is None:
-                continue
+            author = metadata["author"]["name"] or "unknown"
+            created_time = metadata.get("created_time", "")
+            created = created_time[:10] if created_time and created_time[0].isdigit() else "unknown"
 
-            filepath, meta = result
+            meta = {
+                "author": author,
+                "created": created,
+                "ip": metadata.get("ip", ""),
+                "pin_id": metadata.get("id", ""),
+            }
+            if not markdown_content:
+                markdown_content = "(no content)"
+
+            filepath = save_pin(url, meta, markdown_content, self.output_dir, with_media=self.with_media)
+
             _cli_print(f"[Success] {url}")
             _cli_print(f"  -> {filepath}")
             _cli_print(f"  Author: {meta['author']}")

@@ -1,5 +1,8 @@
+"""Build and visualize a word co-occurrence network from downloaded content."""
+
+from __future__ import annotations
+
 import os
-import re
 from collections import Counter
 from pathlib import Path
 
@@ -8,13 +11,14 @@ import networkx as nx
 import numpy as np
 import plotly.graph_objects as go
 
+from zhihu_cli.content.utils.text_clean import extract_cjk, strip_markdown_noise, strip_yaml_frontmatter
 from zhihu_cli.nlp_tools import STOP_WORDS
 from zhihu_cli.paths import zhihu_home
 
 DATA_DIR = zhihu_home()
 
 
-def load_and_tokenize(source_dir: str) -> tuple[list[list[str]], "Counter[str]"]:
+def load_and_tokenize(source_dir: str) -> tuple[list[list[str]], Counter[str]]:
     """Load markdown files, clean text, segment with jieba."""
     docs = []
     word_counter: Counter[str] = Counter()
@@ -27,14 +31,11 @@ def load_and_tokenize(source_dir: str) -> tuple[list[list[str]], "Counter[str]"]
                     with open(file_path, encoding="utf-8") as f:
                         content = f.read()
 
-                    parts = content.split("---", 2)
-                    text = parts[-1] if len(parts) > 1 else parts[0]
-
-                    text = re.sub(r"\$\$.*?\$\$", "", text, flags=re.DOTALL)
-                    text = re.sub(r"\$.*?\$", "", text)
-                    text = re.sub(r"```.*?```", "", text, flags=re.DOTALL)
-                    text = re.sub(r"<.*?>", "", text)
-                    text = "".join(re.findall(r"[一-龥a-zA-Z0-9]+", text))
+                    text = strip_yaml_frontmatter(content)
+                    if text == content and "---" in content:
+                        # Legacy JSON-line files (and plain files with a ``---`` separator).
+                        text = content.split("---", 2)[-1]
+                    text = extract_cjk(strip_markdown_noise(text), keep_latin=True)
 
                     words = [w for w in jieba.lcut(text) if len(w) > 1 and w not in STOP_WORDS]
                     if words:
@@ -48,11 +49,11 @@ def load_and_tokenize(source_dir: str) -> tuple[list[list[str]], "Counter[str]"]
 
 def build_cooccurrence_graph(
     docs: list[list[str]],
-    word_counter: "Counter[str]",
+    word_counter: Counter[str],
     topk: int = 80,
     window_size: int = 5,
     min_edge_weight: int = 3,
-) -> "nx.Graph | None":
+) -> nx.Graph | None:
     """Build word co-occurrence network from tokenized documents."""
     top_words = {word for word, _ in word_counter.most_common(topk)}
 
@@ -81,7 +82,7 @@ def build_cooccurrence_graph(
 
 
 def visualize_network(
-    G: "nx.Graph",
+    G: nx.Graph,
     output_path: str = str(DATA_DIR / "plots" / "zhihu_conetwork.png"),
 ) -> None:
     """Draw co-occurrence network with Plotly."""

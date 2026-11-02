@@ -7,30 +7,43 @@ from pathlib import Path
 import matplotlib.pyplot as plt
 import numpy as np
 
+from zhihu_cli.content.utils.text_clean import strip_code_blocks, strip_latex, strip_yaml_frontmatter
 from zhihu_cli.paths import zhihu_home
 
 
 def count_words(filepath: str, no_code: bool = False, no_latex: bool = False, no_frontmatter: bool = False) -> int:
+    """Count characters in a Markdown file after optional cleaning.
+
+    :param filepath: Path to the Markdown file.
+    :param no_code: Exclude fenced code blocks from the count.
+    :param no_latex: Exclude LaTeX math and environments from the count.
+    :param no_frontmatter: Exclude the YAML frontmatter (files without a
+        frontmatter delimiter count as zero).
+    :returns: The number of remaining characters.
+    """
     with open(filepath, encoding="utf-8") as f:
         content = f.read()
-        if no_frontmatter:
-            # Split file, extract body only (compatible with YAML frontmatter and legacy JSON format)
-            parts = content.split("---", 2)
-            if len(parts) < 2:
-                return 0
-            body = parts[-1]
-        else:
-            body = content
 
-        # Clean: remove LaTeX markers, whitespace
-        clean_text = re.sub(r"\s+", "", body)
-        if no_latex:
-            clean_text = re.sub(r"\$.*?\$", "", clean_text)
-            clean_text = re.sub(r"\\begin\{.*?\}.*?\\end\{.*?\}", "", clean_text, flags=re.DOTALL)
-        if no_code:
-            clean_text = re.sub(r"```.*?```", "", clean_text, flags=re.DOTALL)
+    if no_frontmatter:
+        # Keep the historical behaviour: a file with no frontmatter delimiter
+        # contributes nothing when frontmatter is excluded.
+        if "---" not in content:
+            return 0
+        body = strip_yaml_frontmatter(content)
+        if body == content:
+            # Legacy JSON-line files (and plain files with a ``---`` separator).
+            body = content.split("---", 2)[-1]
+    else:
+        body = content
 
-        return len(clean_text)
+    # Clean: remove whitespace
+    clean = re.sub(r"\s+", "", body)
+    if no_latex:
+        clean = strip_latex(clean)
+    if no_code:
+        clean = strip_code_blocks(clean)
+
+    return len(clean)
 
 
 def plot_cdf(word_counts: list[int], log_scale: bool = False) -> None:

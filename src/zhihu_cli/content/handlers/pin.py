@@ -1,3 +1,7 @@
+"""Pin fetching, page-state parsing, and Markdown rendering."""
+
+from __future__ import annotations
+
 import re
 from typing import Any
 from urllib.parse import urlparse
@@ -96,6 +100,7 @@ def parse_pin_metadata(item: dict[str, Any], users: dict[str, Any] | None = None
             "headline": author.get("headline") or "",
         },
         "comment_permission": _pick(item, "comment_permission", "commentPermission") or "",
+        "ip": _pick(item, "ipInfo", "ip_info") or "",
     }
 
 
@@ -119,11 +124,12 @@ def _link_card_markdown(block: dict[str, Any]) -> str:
 def _render_body(item: dict[str, Any]) -> str:
     """Render a pin's body as Markdown.
 
-    A pin's ``content`` is a list of blocks rather than one document. Text
-    blocks carry HTML and go through the usual converter; a repin carries a
-    ``link_card`` block instead, which has no body of its own and becomes a
-    plain Markdown link to the reposted content. Image and poll blocks hold
-    no text and contribute nothing.
+    A pin's ``content`` is a list of blocks rather than one document, rendered
+    in order. Text blocks carry HTML and go through the usual converter;
+    ``image`` blocks become ``![alt](url)``, ``video`` blocks become
+    ``[video](url)``, and a repin's ``link_card`` block becomes a plain
+    Markdown link to the reposted content. Poll and other unknown block types
+    contribute nothing.
 
     :param item: Pin entity, either from the page state or from the API.
     :returns: The pin body as Markdown.
@@ -132,11 +138,23 @@ def _render_body(item: dict[str, Any]) -> str:
     if not isinstance(blocks, list):
         return converter.convert(blocks or "")
 
-    html = "".join(block.get("content") or "" for block in blocks if block.get("type") == "text")
-    parts = [converter.convert(html)] if html else []
-
+    parts: list[str] = []
     for block in blocks:
-        if block.get("type") == "link_card":
+        block_type = block.get("type")
+        if block_type == "text":
+            text = converter.convert(block.get("content") or "")
+            if text:
+                parts.append(text)
+        elif block_type == "image":
+            url = block.get("url")
+            if url:
+                alt = block.get("alt") or "image"
+                parts.append(f"![{alt}]({url})")
+        elif block_type == "video":
+            url = block.get("url")
+            if url:
+                parts.append(f"[video]({url})")
+        elif block_type == "link_card":
             link = _link_card_markdown(block)
             if link:
                 parts.append(link)

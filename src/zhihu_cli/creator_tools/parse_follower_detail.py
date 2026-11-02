@@ -7,8 +7,7 @@ import os
 from datetime import datetime
 from typing import Any
 
-from zhihu_cli.content.handlers.cache_manager import cache_manager
-from zhihu_cli.content.handlers.requests import session
+from zhihu_cli.content.handlers.requests import fetch_json
 from zhihu_cli.paths import zhihu_home
 
 DB_FILE: str = str(zhihu_home() / "exports" / "follower_detail.json")
@@ -16,19 +15,12 @@ FOLLOWER_URL: str = "https://www.zhihu.com/api/v4/creators/analysis/aggregation/
 
 
 def run_task(days: int = 90) -> None:
-    headers = cache_manager.load_headers()
-    if not headers:
-        print("No cached headers found. Run: zhihu auth paste")
-        return
-
     print(f"--- Fetching follower detail for last {days} days ---")
 
     params: dict[str, str] = {"day": str(-days)}
 
     try:
-        resp = session.get(FOLLOWER_URL, params=params, timeout=15)
-        resp.raise_for_status()
-        data: dict[str, Any] = resp.json()
+        data: dict[str, Any] = fetch_json(FOLLOWER_URL, params=params, timeout=15)
     except Exception as e:
         print(f"Error fetching follower data: {e}")
         return
