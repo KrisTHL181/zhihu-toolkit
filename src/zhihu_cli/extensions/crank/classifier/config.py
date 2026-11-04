@@ -15,7 +15,6 @@ MODEL_DIR: Path = CLASSIFIER_DIR / "model"
 METRICS_PATH: Path = CLASSIFIER_DIR / "metrics.json"
 METADATA_PATH: Path = CLASSIFIER_DIR / "metadata.json"
 TRAINING_DATA_DIR: Path = CLASSIFIER_DIR / "training_data"
-POSITIVE_DIR: Path = TRAINING_DATA_DIR / "positive"
 NEGATIVE_DIR: Path = TRAINING_DATA_DIR / "negative"
 
 # Text processing
@@ -24,8 +23,6 @@ TITLE_WEIGHT: float = 2.0
 
 # Classification thresholds
 CRANK_THRESHOLD: float = 0.5
-UNCERTAIN_LOW: float = 0.3
-UNCERTAIN_HIGH: float = 0.7
 DISCOVERY_THRESHOLD: float = 0.7
 
 # Training hyperparameters
@@ -41,29 +38,6 @@ TRAINING_CONFIG: dict = {
     "logging_steps": 10,
     "seed": 42,
 }
-
-NEGATIVE_COLLECTION_CONFIG: dict = {
-    "target_count": 1000,
-    "science_topics": [
-        "物理学",
-        "天文学",
-        "数学",
-        "化学",
-        "生物学",
-        "量子力学",
-        "相对论",
-        "进化论",
-        "科学科普",
-    ],
-    "science_authors": [
-        "中科院物理所",
-        "中国科普博览",
-    ],
-    "max_per_query": 100,
-    "delay_between_queries": 1.5,
-}
-
-LABEL_MAP: dict[int, str] = {0: "normal", 1: "crank"}
 
 # Crank-related search keywords for discovery
 CRANK_KEYWORDS: list[str] = [

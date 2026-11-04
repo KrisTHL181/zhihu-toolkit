@@ -209,11 +209,6 @@ def upvote_question(question_id: str) -> dict[str, Any]:
     return resp.json()
 
 
-def unvote_question(question_id: str) -> dict[str, Any]:
-    resp = session.delete(f"https://www.zhihu.com/api/v4/questions/{question_id}/voters")
-    return safe_json(resp)
-
-
 def downvote_question(question_id: str) -> dict[str, Any]:  # undocumented endpoint!
     resp = session.post(f"https://www.zhihu.com/api/v4/questions/{question_id}/voters/down")
     return resp.json()

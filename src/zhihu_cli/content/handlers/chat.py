@@ -9,8 +9,6 @@ if TYPE_CHECKING:
 
     from rich.text import Text
 
-import click
-
 from zhihu_cli.content.handlers import fmt_time
 from zhihu_cli.content.handlers.chat_commands import ChatCommandRegistry
 from zhihu_cli.content.handlers.chat_commands_builtin import (
@@ -473,18 +471,6 @@ def export_chat_history(
     click.echo(f"  Saved to {filepath}", err=True)
 
     return filepath
-
-
-def _fmt_chat_line(sender: str, content: str, ts: int | float | None) -> str:
-    """Format a single chat line in chat-history style: ``[time]sender: content``.
-
-    Timestamps are dimmed, sender names are green-bold — matching the output
-    of ``chat history`` and ``listen messages`` commands.
-    """
-    t = fmt_time(ts)
-    time_part = click.style(f"[{t}]", dim=True)
-    sender_part = click.style(sender, fg="green", bold=True)
-    return f"  {time_part}{sender_part}: {content}"
 
 
 def _fmt_chat_line_rich(sender: str, content: str | Text, ts: int | float | str | None):

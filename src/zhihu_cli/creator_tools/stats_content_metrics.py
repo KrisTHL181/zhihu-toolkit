@@ -138,7 +138,6 @@ ALL_METRIC_KEYS = METRIC_KEYS + EXTRA_METRIC_KEYS
 # advanced data at all. new_follow_uv / follower_conversion_rate are also
 # always 0 in practice, so there is nothing to rebuild.
 SYNTH_ADDITIVE_KEYS = ["pv", "show", "play", "upvote", "like", "collect", "comment", "share", "re_pin"]
-ALL_METRIC_LABELS = {**METRIC_LABELS, **EXTRA_METRIC_LABELS}
 
 # ── format detection (same logic as plot_content_metrics.py) ────────────────
 

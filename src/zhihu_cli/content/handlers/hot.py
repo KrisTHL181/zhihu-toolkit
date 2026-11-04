@@ -4,8 +4,6 @@ from typing import Any
 
 from zhihu_cli.content.handlers.requests import session
 
-HOT_LIST_URL = "https://www.zhihu.com/api/v3/feed/topstory/hot-lists/total?limit=50&desktop=true"
-
 
 def _parse_hot_item(item: dict[str, Any]) -> dict[str, Any]:
     target = item.get("target", {})

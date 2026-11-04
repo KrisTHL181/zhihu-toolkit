@@ -32,8 +32,3 @@ def smoothing_label(window: int | None = None) -> str:
     if window is not None:
         return f"{method} ({window}-day)"
     return method
-
-
-def smoothing_suffix() -> str:
-    """Return ``"ma"`` or ``"ema"`` — useful for dynamic column naming."""
-    return cache_manager.get_smoothing()

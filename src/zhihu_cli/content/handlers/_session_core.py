@@ -92,8 +92,6 @@ class ZhihuSession(_requests.Session):
     or "ignore" (skip handling) to control risk-control handling.
     """
 
-    CAPTCHA_HANDLER_MODES = ("auto", "prompt", "ignore")
-
     def __init__(self, *args: Any, **kwargs: Any) -> None:
         super().__init__(*args, **kwargs)
         self._zse_cipher = None  # lazy init to avoid import-time side effects

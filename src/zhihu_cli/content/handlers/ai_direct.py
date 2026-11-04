@@ -25,14 +25,6 @@ CHAT_MODES: dict[str, str] = {
     "deep-thinking": "DEEP_SEARCH",
 }
 
-# Available knowledge bases
-_KNOWLEDGE_BASES: dict[str, str] = {
-    "global": "KBT_GLOBAL",
-    "zhihu": "KBT_ZHIHU",
-    "paper": "KBT_PAPER",
-    "personal": "KBT_PERSONAL_KNOWLEDGE_BASE",
-}
-
 # Friendly presets
 KNOWLEDGE_PRESETS: dict[str, list[str]] = {
     "all": ["KBT_GLOBAL", "KBT_ZHIHU", "KBT_PAPER", "KBT_PERSONAL_KNOWLEDGE_BASE"],

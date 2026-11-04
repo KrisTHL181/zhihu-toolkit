@@ -27,8 +27,6 @@ ME_URL = "https://www.zhihu.com/api/v4/me"
 HOME_URL = "https://www.zhihu.com/"
 RISK_CONTROL_FALLBACK = "https://www.zhihu.com/account/risk_control/"
 
-RISK_CONTROL_EXIT = object()
-
 
 def _client_hints(ua: str) -> dict[str, str]:
     """Derive Chromium Client Hints from a User-Agent string.

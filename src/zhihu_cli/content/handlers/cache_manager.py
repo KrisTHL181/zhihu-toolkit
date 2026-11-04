@@ -2,7 +2,6 @@ import functools
 import json
 import math
 import threading
-import time
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any
@@ -33,8 +32,6 @@ class CacheManager:
 
         self.cache_dir.mkdir(parents=True, exist_ok=True)
         self.header_file = self.cache_dir / "headers.json"
-        self.content_dir = self.cache_dir / "questions"
-        self.content_dir.mkdir(exist_ok=True)
 
         self.profiles_dir = self.cache_dir / "profiles"
         self.profiles_dir.mkdir(exist_ok=True)
@@ -82,7 +79,6 @@ class CacheManager:
 
         import shutil
 
-        migrated = False
         # profiles
         old_profiles = old_cache / "profiles"
         if old_profiles.is_dir():
@@ -90,22 +86,11 @@ class CacheManager:
                 dst = self.profiles_dir / f.name
                 if not dst.exists():
                     shutil.copy2(f, dst)
-                    migrated = True
 
         # active_profile
         old_active = old_cache / "active_profile"
         if old_active.exists() and not self.active_profile_file.exists():
             shutil.copy2(old_active, self.active_profile_file)
-            migrated = True
-
-        # questions
-        old_questions = old_cache / "questions"
-        if old_questions.is_dir():
-            for f in old_questions.iterdir():
-                dst = self.content_dir / f.name
-                if not dst.exists():
-                    shutil.copy2(f, dst)
-                    migrated = True
 
         # legacy headers.json
         old_headers = old_cache / "headers.json"
@@ -113,11 +98,6 @@ class CacheManager:
             default_path = self._resolve_profile_path("default")
             if not default_path.exists():
                 shutil.copy2(old_headers, default_path)
-                migrated = True
-
-        if migrated:
-            # Leave old cache in place as backup; user can delete manually.
-            pass
 
     def _migrate_legacy_headers(self) -> str | None:
         """If old headers.json has data and no profiles exist, migrate to 'default' profile."""
@@ -338,21 +318,6 @@ class CacheManager:
         config = self.get_config()
         config["suppress_incomplete_warning"] = bool(enabled)
         self._atomic_write(self.config_file, json.dumps(config, indent=2))
-
-    # ── question cache ──────────────────────────────────────────────────
-
-    @make_thread_safe
-    def get_cached_question(self, q_id: str) -> dict[str, Any]:
-        cache_path = self.content_dir / f"{q_id}.json"
-        if cache_path.exists():
-            if time.time() - cache_path.stat().st_mtime < 86400:
-                return json.loads(cache_path.read_text())
-        return {}
-
-    @make_thread_safe
-    def save_question(self, q_id: str, data: dict[str, Any]) -> None:
-        cache_path = self.content_dir / f"{q_id}.json"
-        self._atomic_write(cache_path, json.dumps(data, indent=2))
 
 
 cache_manager = CacheManager()

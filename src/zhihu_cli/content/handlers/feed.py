@@ -6,9 +6,6 @@ from typing import Any
 from zhihu_cli.content.handlers import fmt_time
 from zhihu_cli.content.handlers.waterfall import PAGE_SIZE, stream_handler
 
-RECOMMEND_URL = "https://www.zhihu.com/api/v3/feed/topstory/recommend?limit=20&desktop=true"
-FOLLOW_URL = "https://www.zhihu.com/api/v3/moments?limit=20&desktop=true"
-
 
 def _parse_author(author: dict[str, Any] | None) -> dict[str, Any]:
     if not author:

@@ -243,10 +243,6 @@ class DaemonNotRunningError(DaemonError):
     """The daemon is not running or the socket is unavailable."""
 
 
-class DaemonConnectionError(DaemonError):
-    """IPC connection failed or was lost mid-request."""
-
-
 class DaemonProtocolError(DaemonError):
     """Unexpected or malformed response from daemon."""
 

@@ -482,8 +482,3 @@ def segments_to_text(segments: list[dict[str, Any]]) -> str:
             lines.append(text)
 
     return "\n\n".join(lines)
-
-
-def segments_to_json(segments: list[dict[str, Any]]) -> str:
-    """Dump segments as formatted JSON."""
-    return json.dumps(segments, ensure_ascii=False, indent=2)
