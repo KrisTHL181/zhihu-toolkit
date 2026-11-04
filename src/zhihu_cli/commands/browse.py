@@ -50,6 +50,7 @@ from zhihu_cli.content.handlers.yanxuan import (
     is_paid_column_section_url,
     segments_to_text,
 )
+from zhihu_cli.content.handlers.zvideo import scrape_zvideo
 from zhihu_cli.output import (
     blank,
     echo,
@@ -307,6 +308,37 @@ def register_browse(main_group):
         comments = stats.get("comment_count", 0)
         header = (
             f"# {title}\n\n**Author:** {author} | **Created:** {created} | "
+            f"**Upvotes:** {upvotes} | **Comments:** {comments}"
+        )
+
+        print_markdown(markdown, header=header, reading_mode=reading_mode)
+
+    @browse.command("zvideo")
+    @click.argument("url")
+    @click.option("--reading-mode/--no-reading-mode", default=True, help="Use Rich pager for reading")
+    @click.option("--json", "output_json", is_flag=True, default=False, help="Output as JSON")
+    def browse_zvideo(url: str, reading_mode: bool, output_json: bool) -> None:
+        """View a single Zhihu zvideo in the terminal.
+
+        URL may be a full zvideo URL or a bare numeric zvideo ID.
+        """
+        metadata, markdown = scrape_zvideo(url)
+
+        if output_json:
+            print_json({"metadata": metadata, "content_md": markdown})
+            return
+
+        title = metadata.get("title", "untitled")
+        author = metadata.get("author", {}).get("name", "unknown")
+        created = metadata.get("created_time") or "unknown"
+        duration = metadata.get("duration", 0)
+        stats = metadata.get("stats", {})
+        plays = stats.get("play_count", 0)
+        upvotes = stats.get("voteup_count", 0)
+        comments = stats.get("comment_count", 0)
+        header = (
+            f"# {title}\n\n**Author:** {author} | **Created:** {created} | "
+            f"**Duration:** {duration:.1f}s | **Plays:** {plays} | "
             f"**Upvotes:** {upvotes} | **Comments:** {comments}"
         )
 
