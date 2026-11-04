@@ -148,34 +148,49 @@ def register_interact(main_group) -> None:
 
     @interact_vote.command("up")
     @click.argument("url_or_id")
-    def vote_up(url_or_id: str) -> None:
+    @click.option("--json", "output_json", is_flag=True, default=False, help="Output raw JSON response")
+    def vote_up(url_or_id: str, output_json: bool) -> None:
         """Upvote an answer or question."""
         item_type, item_id = _parse_item_url_safe(url_or_id)
         if item_type in ("answers", "answer"):
-            echo(upvote_answer(_resolve_answer_id(item_id)))
+            resp = upvote_answer(_resolve_answer_id(item_id))
         elif item_type in ("questions", "question"):
-            echo(upvote_question(item_id))
+            resp = upvote_question(item_id)
         else:
-            upvote_answer(url_or_id)  # treat as raw ID
+            resp = upvote_answer(url_or_id)  # treat as raw ID
+        if output_json:
+            print_json(resp)
+            return
+        echo(resp)
 
     @interact_vote.command("neutral")
     @click.argument("url_or_id")
-    def vote_neutral(url_or_id: str) -> None:
+    @click.option("--json", "output_json", is_flag=True, default=False, help="Output raw JSON response")
+    def vote_neutral(url_or_id: str, output_json: bool) -> None:
         """Remove vote from an answer."""
         item_type, item_id = _parse_item_url_safe(url_or_id)
-        echo(neutral_answer(_resolve_answer_id(item_id) if item_type else url_or_id))
+        resp = neutral_answer(_resolve_answer_id(item_id) if item_type else url_or_id)
+        if output_json:
+            print_json(resp)
+            return
+        echo(resp)
 
     @interact_vote.command("down")
     @click.argument("url_or_id")
-    def vote_down(url_or_id: str) -> None:
+    @click.option("--json", "output_json", is_flag=True, default=False, help="Output raw JSON response")
+    def vote_down(url_or_id: str, output_json: bool) -> None:
         """Downvote an answer or question."""
         item_type, item_id = _parse_item_url_safe(url_or_id)
         if item_type in ("answers", "answer"):
-            echo(downvote_answer(_resolve_answer_id(item_id)))
+            resp = downvote_answer(_resolve_answer_id(item_id))
         elif item_type in ("questions", "question"):
-            echo(downvote_question(item_id))
+            resp = downvote_question(item_id)
         else:
-            downvote_answer(url_or_id)
+            resp = downvote_answer(url_or_id)
+        if output_json:
+            print_json(resp)
+            return
+        echo(resp)
 
     # ── thank ───────────────────────────────────────────────────────────────
 
@@ -185,15 +200,25 @@ def register_interact(main_group) -> None:
 
     @interact_thank.command("add")
     @click.argument("answer_id")
-    def thank_add(answer_id: str) -> None:
+    @click.option("--json", "output_json", is_flag=True, default=False, help="Output raw JSON response")
+    def thank_add(answer_id: str, output_json: bool) -> None:
         """Thank an answer."""
-        echo(thank_answer(answer_id))
+        resp = thank_answer(answer_id)
+        if output_json:
+            print_json(resp)
+            return
+        echo(resp)
 
     @interact_thank.command("remove")
     @click.argument("answer_id")
-    def thank_remove(answer_id: str) -> None:
+    @click.option("--json", "output_json", is_flag=True, default=False, help="Output raw JSON response")
+    def thank_remove(answer_id: str, output_json: bool) -> None:
         """Remove thanks from an answer."""
-        echo(unthank_answer(answer_id))
+        resp = unthank_answer(answer_id)
+        if output_json:
+            print_json(resp)
+            return
+        echo(resp)
 
     # ── follow ──────────────────────────────────────────────────────────────
 
@@ -203,15 +228,25 @@ def register_interact(main_group) -> None:
 
     @interact_follow.command("user")
     @click.argument("user_id")
-    def follow_user(user_id: str) -> None:
+    @click.option("--json", "output_json", is_flag=True, default=False, help="Output raw JSON response")
+    def follow_user(user_id: str, output_json: bool) -> None:
         """Follow a user by URL token or ID."""
-        echo(follow(user_id))
+        resp = follow(user_id)
+        if output_json:
+            print_json(resp)
+            return
+        echo(resp)
 
     @interact_follow.command("question")
     @click.argument("question_id")
-    def follow_question_cmd(question_id: str) -> None:
+    @click.option("--json", "output_json", is_flag=True, default=False, help="Output raw JSON response")
+    def follow_question_cmd(question_id: str, output_json: bool) -> None:
         """Follow a question."""
-        echo(follow_question(question_id))
+        resp = follow_question(question_id)
+        if output_json:
+            print_json(resp)
+            return
+        echo(resp)
 
     # ── unfollow ────────────────────────────────────────────────────────────
 
@@ -221,15 +256,25 @@ def register_interact(main_group) -> None:
 
     @interact_unfollow.command("user")
     @click.argument("user_id")
-    def unfollow_user(user_id: str) -> None:
+    @click.option("--json", "output_json", is_flag=True, default=False, help="Output raw JSON response")
+    def unfollow_user(user_id: str, output_json: bool) -> None:
         """Unfollow a user."""
-        echo(unfollow(user_id))
+        resp = unfollow(user_id)
+        if output_json:
+            print_json(resp)
+            return
+        echo(resp)
 
     @interact_unfollow.command("question")
     @click.argument("question_id")
-    def unfollow_question_cmd(question_id: str) -> None:
+    @click.option("--json", "output_json", is_flag=True, default=False, help="Output raw JSON response")
+    def unfollow_question_cmd(question_id: str, output_json: bool) -> None:
         """Unfollow a question."""
-        echo(unfollow_question(question_id))
+        resp = unfollow_question(question_id)
+        if output_json:
+            print_json(resp)
+            return
+        echo(resp)
 
     # ── block ───────────────────────────────────────────────────────────────
 
@@ -239,16 +284,24 @@ def register_interact(main_group) -> None:
 
     @interact_block.command("add")
     @click.argument("user_id")
-    def block_user(user_id: str) -> None:
+    @click.option("--json", "output_json", is_flag=True, default=False, help="Output raw JSON response")
+    def block_user(user_id: str, output_json: bool) -> None:
         """Block a user."""
         block(user_id)
+        if output_json:
+            print_json({"success": True, "user_id": user_id, "action": "block"})
+            return
         success(f"Blocked {user_id}")
 
     @interact_block.command("remove")
     @click.argument("user_id")
-    def block_remove(user_id: str) -> None:
+    @click.option("--json", "output_json", is_flag=True, default=False, help="Output raw JSON response")
+    def block_remove(user_id: str, output_json: bool) -> None:
         """Unblock a user."""
         unblock(user_id)
+        if output_json:
+            print_json({"success": True, "user_id": user_id, "action": "unblock"})
+            return
         success(f"Unblocked {user_id}")
 
     # ── comment ─────────────────────────────────────────────────────────────
@@ -260,19 +313,24 @@ def register_interact(main_group) -> None:
     @interact_comment.command("post")
     @click.argument("url")
     @click.argument("content")
-    def comment_post(url: str, content: str) -> None:
+    @click.option("--json", "output_json", is_flag=True, default=False, help="Output raw JSON response")
+    def comment_post(url: str, content: str, output_json: bool) -> None:
         """Post a comment on an item. Use URL to identify the item."""
         item_type, item_id = _parse_item_url(url)
         if item_type == "answers":
             item_id = _resolve_answer_id(item_id)
         resp = comment_item(item_type, item_id, content)
+        if output_json:
+            print_json(resp)
+            return
         echo(resp)
 
     @interact_comment.command("reply")
     @click.argument("url")
     @click.argument("comment_id")
     @click.argument("content")
-    def comment_reply(url: str, comment_id: str, content: str) -> None:
+    @click.option("--json", "output_json", is_flag=True, default=False, help="Output raw JSON response")
+    def comment_reply(url: str, comment_id: str, content: str, output_json: bool) -> None:
         """Reply to an existing comment on an item.
 
         URL identifies the item (answer/article/pin/question) the comment
@@ -287,41 +345,64 @@ def register_interact(main_group) -> None:
         if item_type == "answers":
             item_id = _resolve_answer_id(item_id)
         resp = comment_item(item_type, item_id, content, reply_comment_id=comment_id)
+        if output_json:
+            print_json(resp)
+            return
         echo(resp)
 
     @interact_comment.command("delete")
     @click.argument("comment_id")
-    def comment_delete(comment_id: str) -> None:
+    @click.option("--json", "output_json", is_flag=True, default=False, help="Output raw JSON response")
+    def comment_delete(comment_id: str, output_json: bool) -> None:
         """Delete a comment by ID."""
         delete_comment(comment_id)
+        if output_json:
+            print_json({"success": True, "comment_id": comment_id, "action": "delete"})
+            return
         success(f"Deleted comment {comment_id}")
 
     @interact_comment.command("like")
     @click.argument("comment_id")
-    def comment_like(comment_id: str) -> None:
+    @click.option("--json", "output_json", is_flag=True, default=False, help="Output raw JSON response")
+    def comment_like(comment_id: str, output_json: bool) -> None:
         """Like a comment."""
-        like_comment(comment_id)
+        resp = like_comment(comment_id)
+        if output_json:
+            print_json(resp)
+            return
         success(f"Liked comment {comment_id}")
 
     @interact_comment.command("unlike")
     @click.argument("comment_id")
-    def comment_unlike(comment_id: str) -> None:
+    @click.option("--json", "output_json", is_flag=True, default=False, help="Output raw JSON response")
+    def comment_unlike(comment_id: str, output_json: bool) -> None:
         """Cancel a previous like on a comment."""
-        cancel_like_comment(comment_id)
+        resp = cancel_like_comment(comment_id)
+        if output_json:
+            print_json(resp)
+            return
         success(f"Canceled like on comment {comment_id}")
 
     @interact_comment.command("dislike")
     @click.argument("comment_id")
-    def comment_dislike(comment_id: str) -> None:
+    @click.option("--json", "output_json", is_flag=True, default=False, help="Output raw JSON response")
+    def comment_dislike(comment_id: str, output_json: bool) -> None:
         """Dislike a comment."""
-        dislike_comment(comment_id)
+        resp = dislike_comment(comment_id)
+        if output_json:
+            print_json(resp)
+            return
         success(f"Disliked comment {comment_id}")
 
     @interact_comment.command("undislike")
     @click.argument("comment_id")
-    def comment_undislike(comment_id: str) -> None:
+    @click.option("--json", "output_json", is_flag=True, default=False, help="Output raw JSON response")
+    def comment_undislike(comment_id: str, output_json: bool) -> None:
         """Cancel a previous dislike on a comment."""
-        cancel_dislike_comment(comment_id)
+        resp = cancel_dislike_comment(comment_id)
+        if output_json:
+            print_json(resp)
+            return
         success(f"Canceled dislike on comment {comment_id}")
 
     @interact_comment.command("interactive")
@@ -359,35 +440,55 @@ def register_interact(main_group) -> None:
     @interact_collect.command("add")
     @click.argument("url")
     @click.option("--collection", "-c", "collection_id", help="Target collection ID")
-    def collect_add(url: str, collection_id: str | None) -> None:
+    @click.option("--json", "output_json", is_flag=True, default=False, help="Output raw JSON response")
+    def collect_add(url: str, collection_id: str | None, output_json: bool) -> None:
         """Add an item to the default or specified collection."""
         item_type, item_id = _parse_item_url(url)
         if collection_id:
-            echo(add_to_collection(item_type, item_id, collection_id))
+            resp = add_to_collection(item_type, item_id, collection_id)
         else:
-            echo(collect(item_type, item_id))
+            resp = collect(item_type, item_id)
+        if output_json:
+            print_json(resp)
+            return
+        echo(resp)
 
     @interact_collect.command("remove")
     @click.argument("url")
     @click.option("--collection", "-c", "collection_id", required=True, help="Target collection ID")
-    def collect_remove(url: str, collection_id: str) -> None:
+    @click.option("--json", "output_json", is_flag=True, default=False, help="Output raw JSON response")
+    def collect_remove(url: str, collection_id: str, output_json: bool) -> None:
         """Remove an item from a collection."""
         item_type, item_id = _parse_item_url(url)
-        echo(delete_to_collection(item_type, item_id, collection_id))
+        resp = delete_to_collection(item_type, item_id, collection_id)
+        if output_json:
+            print_json(resp)
+            return
+        echo(resp)
 
     @interact_collect.command("create")
     @click.argument("title")
     @click.option("--description", "-d", default="", help="Collection description")
     @click.option("--public/--private", default=True, help="Visibility")
-    def collect_create(title: str, description: str, public: bool) -> None:
+    @click.option("--json", "output_json", is_flag=True, default=False, help="Output raw JSON response")
+    def collect_create(title: str, description: str, public: bool, output_json: bool) -> None:
         """Create a new collection."""
-        echo(create_collection(title, description, public))
+        resp = create_collection(title, description, public)
+        if output_json:
+            print_json(resp)
+            return
+        echo(resp)
 
     @interact_collect.command("delete")
     @click.argument("collection_id")
-    def collect_delete(collection_id: str) -> None:
+    @click.option("--json", "output_json", is_flag=True, default=False, help="Output raw JSON response")
+    def collect_delete(collection_id: str, output_json: bool) -> None:
         """Delete a collection."""
-        echo(delete_collection(collection_id))
+        resp = delete_collection(collection_id)
+        if output_json:
+            print_json(resp)
+            return
+        echo(resp)
 
     @interact_collect.command("view")
     @click.argument("collection_id_or_url")

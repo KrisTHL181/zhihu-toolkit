@@ -1,7 +1,10 @@
 """Search command group for zhihu-cli."""
 
+from __future__ import annotations
+
 import click
 
+from zhihu_cli.commands._helpers import _sort_items
 from zhihu_cli.content.handlers.search import search_articles, search_questions, search_topics, search_users
 from zhihu_cli.content.handlers.waterfall import PAGE_SIZE
 from zhihu_cli.output import (
@@ -32,10 +35,27 @@ def register_search(main_group):
     @click.argument("query")
     @click.option("--max", "-n", "max_items", type=int, default=None, help="Max total items (default: all)")
     @click.option("--json", "output_json", is_flag=True, default=False, help="Output as JSON")
-    def search_question_cmd(query: str, max_items: int | None, output_json: bool) -> None:
+    @click.option(
+        "--sort",
+        "sort_by",
+        type=click.Choice(["default", "time", "answers", "followers", "visits", "upvotes"]),
+        default="default",
+        help="Sort results by criteria",
+    )
+    def search_question_cmd(query: str, max_items: int | None, output_json: bool, sort_by: str) -> None:
         """Search Zhihu questions by keyword."""
         set_json_mode(output_json)
         items = search_questions(query, limit=PAGE_SIZE, max_items=max_items)
+        if sort_by != "default":
+            _SORT_MAP = {
+                "time": "updated_time",
+                "answers": "answer_count",
+                "followers": "follower_count",
+                "visits": "visit_count",
+                "upvotes": "voteup_count",
+            }
+            items = _sort_items(items, _SORT_MAP[sort_by])
+
         if output_json:
             print_json(items)
             return
@@ -54,10 +74,21 @@ def register_search(main_group):
     @click.argument("query")
     @click.option("--max", "-n", "max_items", type=int, default=None, help="Max total items (default: all)")
     @click.option("--json", "output_json", is_flag=True, default=False, help="Output as JSON")
-    def search_article_cmd(query: str, max_items: int | None, output_json: bool) -> None:
+    @click.option(
+        "--sort",
+        "sort_by",
+        type=click.Choice(["default", "time", "upvotes", "comments"]),
+        default="default",
+        help="Sort results by criteria",
+    )
+    def search_article_cmd(query: str, max_items: int | None, output_json: bool, sort_by: str) -> None:
         """Search Zhihu articles by keyword."""
         set_json_mode(output_json)
         items = search_articles(query, limit=PAGE_SIZE, max_items=max_items)
+        if sort_by != "default":
+            _SORT_MAP = {"time": "created_time", "upvotes": "voteup_count", "comments": "comment_count"}
+            items = _sort_items(items, _SORT_MAP[sort_by])
+
         if output_json:
             print_json(items)
             return
@@ -76,10 +107,26 @@ def register_search(main_group):
     @click.argument("query")
     @click.option("--max", "-n", "max_items", type=int, default=None, help="Max total items (default: all)")
     @click.option("--json", "output_json", is_flag=True, default=False, help="Output as JSON")
-    def search_user_cmd(query: str, max_items: int | None, output_json: bool) -> None:
+    @click.option(
+        "--sort",
+        "sort_by",
+        type=click.Choice(["default", "followers", "answers", "articles", "upvotes"]),
+        default="default",
+        help="Sort results by criteria",
+    )
+    def search_user_cmd(query: str, max_items: int | None, output_json: bool, sort_by: str) -> None:
         """Search Zhihu users by keyword."""
         set_json_mode(output_json)
         items = search_users(query, limit=PAGE_SIZE, max_items=max_items)
+        if sort_by != "default":
+            _SORT_MAP = {
+                "followers": "follower_count",
+                "answers": "answer_count",
+                "articles": "articles_count",
+                "upvotes": "voteup_count",
+            }
+            items = _sort_items(items, _SORT_MAP[sort_by])
+
         if output_json:
             print_json(items)
             return
@@ -99,10 +146,21 @@ def register_search(main_group):
     @click.argument("query")
     @click.option("--max", "-n", "max_items", type=int, default=None, help="Max total items (default: all)")
     @click.option("--json", "output_json", is_flag=True, default=False, help="Output as JSON")
-    def search_topic_cmd(query: str, max_items: int | None, output_json: bool) -> None:
+    @click.option(
+        "--sort",
+        "sort_by",
+        type=click.Choice(["default", "followers", "questions", "visits"]),
+        default="default",
+        help="Sort results by criteria",
+    )
+    def search_topic_cmd(query: str, max_items: int | None, output_json: bool, sort_by: str) -> None:
         """Search Zhihu topics by keyword."""
         set_json_mode(output_json)
         items = search_topics(query, limit=PAGE_SIZE, max_items=max_items)
+        if sort_by != "default":
+            _SORT_MAP = {"followers": "followers_count", "questions": "questions_count", "visits": "visit_count"}
+            items = _sort_items(items, _SORT_MAP[sort_by])
+
         if output_json:
             print_json(items)
             return

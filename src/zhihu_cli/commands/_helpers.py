@@ -223,21 +223,45 @@ def _display_following_items(items: list[dict], totals: int | None = None) -> No
         echo(f"  {f_dim(f'── {len(items)}{total_str} items')}")
 
 
+# Sentinel strings used by timestamp formatters when a value is unavailable.
+# They are truthy, so a plain ``or ""`` fallback would sort them as if they
+# were real data — and ``"unknown time"`` even sorts above every ISO timestamp.
+_MISSING_SORT_VALUES = frozenset({"", "unknown", "unknown time"})
+
+
 def _sort_items(items: list[dict], field: str, *, reverse: bool = True) -> list[dict]:
     """Sort a list of item dicts by *field* locally (descending by default).
 
-    Used by browse subcommands to re-sort fetched data without additional API calls.
+    Used by browse, search and people subcommands to re-sort fetched data
+    without additional API calls.
 
     :param items: List of item dicts to sort.
     :param field: Dict key to sort by. ``"default"`` or empty string returns
                   items in original order.
     :param reverse: Sort descending (highest first). Default ``True``.
-    :returns: A new sorted list (original is not mutated).
+    :returns: A new sorted list (original is not mutated).  Items whose value
+        is missing or one of the formatter's "unknown" placeholders are always
+        placed last, regardless of *reverse*.
     """
     if not items or field in ("default", ""):
         return list(items)
-    # Auto-detect numeric vs string sort from the first item
-    sample = items[0].get(field) if items else None
+
+    def _is_missing(value: Any) -> bool:
+        if value is None:
+            return True
+        if isinstance(value, str):
+            return value.strip().lower() in _MISSING_SORT_VALUES
+        return False
+
+    present = [item for item in items if not _is_missing(item.get(field))]
+    missing = [item for item in items if _is_missing(item.get(field))]
+    if not present:
+        return list(items)
+
+    # Auto-detect numeric vs string sort from the first present value
+    sample = present[0].get(field)
     if isinstance(sample, (int, float)):
-        return sorted(items, key=lambda x: x.get(field) or 0, reverse=reverse)
-    return sorted(items, key=lambda x: x.get(field) or "", reverse=reverse)
+        present.sort(key=lambda x: x.get(field), reverse=reverse)
+    else:
+        present.sort(key=lambda x: str(x.get(field)), reverse=reverse)
+    return present + missing

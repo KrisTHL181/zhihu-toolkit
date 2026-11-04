@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import click
 
-from zhihu_cli.commands._helpers import _extract_url_token
+from zhihu_cli.commands._helpers import _extract_url_token, _sort_items
 from zhihu_cli.content.handlers.people import (
     fetch_member_activities,
     fetch_member_answers,
@@ -304,12 +304,23 @@ def register_people(main_group):
     @click.argument("url_token")
     @click.option("--max", "-n", "max_items", type=int, default=None, help="Max total items (default: all)")
     @click.option("--json", "output_json", is_flag=True, default=False, help="Output as JSON")
-    def people_answers(url_token: str, max_items: int | None, output_json: bool) -> None:
+    @click.option(
+        "--sort",
+        "sort_by",
+        type=click.Choice(["default", "time", "upvotes", "comments"]),
+        default="default",
+        help="Sort results by criteria",
+    )
+    def people_answers(url_token: str, max_items: int | None, output_json: bool, sort_by: str) -> None:
         """List a user's answers."""
         set_json_mode(output_json)
         token = _extract_url_token(url_token)
         info(f"Fetching answers for {token}...")
         items = fetch_member_answers(token, limit=PAGE_SIZE, max_items=max_items)
+        if sort_by != "default":
+            _SORT_MAP = {"time": "created_time", "upvotes": "voteup_count", "comments": "comment_count"}
+            items = _sort_items(items, _SORT_MAP[sort_by])
+
         if output_json:
             print_json(items)
             return
@@ -324,12 +335,23 @@ def register_people(main_group):
     @click.argument("url_token")
     @click.option("--max", "-n", "max_items", type=int, default=None, help="Max total items (default: all)")
     @click.option("--json", "output_json", is_flag=True, default=False, help="Output as JSON")
-    def people_articles(url_token: str, max_items: int | None, output_json: bool) -> None:
+    @click.option(
+        "--sort",
+        "sort_by",
+        type=click.Choice(["default", "time", "upvotes", "comments"]),
+        default="default",
+        help="Sort results by criteria",
+    )
+    def people_articles(url_token: str, max_items: int | None, output_json: bool, sort_by: str) -> None:
         """List a user's articles."""
         set_json_mode(output_json)
         token = _extract_url_token(url_token)
         info(f"Fetching articles for {token}...")
         items = fetch_member_articles(token, limit=PAGE_SIZE, max_items=max_items)
+        if sort_by != "default":
+            _SORT_MAP = {"time": "created_time", "upvotes": "voteup_count", "comments": "comment_count"}
+            items = _sort_items(items, _SORT_MAP[sort_by])
+
         if output_json:
             print_json(items)
             return
@@ -344,12 +366,23 @@ def register_people(main_group):
     @click.argument("url_token")
     @click.option("--max", "-n", "max_items", type=int, default=None, help="Max total items (default: all)")
     @click.option("--json", "output_json", is_flag=True, default=False, help="Output as JSON")
-    def people_pins(url_token: str, max_items: int | None, output_json: bool) -> None:
+    @click.option(
+        "--sort",
+        "sort_by",
+        type=click.Choice(["default", "time", "upvotes", "comments"]),
+        default="default",
+        help="Sort results by criteria",
+    )
+    def people_pins(url_token: str, max_items: int | None, output_json: bool, sort_by: str) -> None:
         """List a user's pins (想法)."""
         set_json_mode(output_json)
         token = _extract_url_token(url_token)
         info(f"Fetching pins for {token}...")
         items = fetch_member_pins(token, limit=PAGE_SIZE, max_items=max_items)
+        if sort_by != "default":
+            _SORT_MAP = {"time": "created_time", "upvotes": "voteup_count", "comments": "comment_count"}
+            items = _sort_items(items, _SORT_MAP[sort_by])
+
         if output_json:
             print_json(items)
             return
@@ -371,12 +404,23 @@ def register_people(main_group):
     @click.argument("url_token")
     @click.option("--max", "-n", "max_items", type=int, default=None, help="Max total items (default: all)")
     @click.option("--json", "output_json", is_flag=True, default=False, help="Output as JSON")
-    def people_questions(url_token: str, max_items: int | None, output_json: bool) -> None:
+    @click.option(
+        "--sort",
+        "sort_by",
+        type=click.Choice(["default", "time", "answers", "followers"]),
+        default="default",
+        help="Sort results by criteria",
+    )
+    def people_questions(url_token: str, max_items: int | None, output_json: bool, sort_by: str) -> None:
         """List questions asked by a user."""
         set_json_mode(output_json)
         token = _extract_url_token(url_token)
         info(f"Fetching questions for {token}...")
         items = fetch_member_questions(token, limit=PAGE_SIZE, max_items=max_items)
+        if sort_by != "default":
+            _SORT_MAP = {"time": "created_time", "answers": "answer_count", "followers": "follower_count"}
+            items = _sort_items(items, _SORT_MAP[sort_by])
+
         if output_json:
             print_json(items)
             return
@@ -394,7 +438,16 @@ def register_people(main_group):
         "--creations-only", is_flag=True, default=False, help="Only show content creations (answers, pins, articles)"
     )
     @click.option("--json", "output_json", is_flag=True, default=False, help="Output as JSON")
-    def people_activities(url_token: str, max_items: int | None, creations_only: bool, output_json: bool) -> None:
+    @click.option(
+        "--sort",
+        "sort_by",
+        type=click.Choice(["default", "time", "upvotes", "comments"]),
+        default="default",
+        help="Sort results by criteria",
+    )
+    def people_activities(
+        url_token: str, max_items: int | None, creations_only: bool, output_json: bool, sort_by: str
+    ) -> None:
         """List a user's recent activities (new answers, articles, pins, etc.).
 
         By default shows ALL activities including votes and follows.
@@ -404,6 +457,10 @@ def register_people(main_group):
         token = _extract_url_token(url_token)
         info(f"Fetching activities for {token}...")
         items = fetch_member_activities(token, limit=PAGE_SIZE, max_items=max_items, creations_only=creations_only)
+        if sort_by != "default":
+            _SORT_MAP = {"time": "created_time", "upvotes": "voteup_count", "comments": "comment_count"}
+            items = _sort_items(items, _SORT_MAP[sort_by])
+
         if output_json:
             print_json(items)
             return
