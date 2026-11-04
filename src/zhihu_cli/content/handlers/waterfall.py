@@ -23,6 +23,17 @@ per page).  Anything that needs a page count should bound the walk with
 ``max_pages`` rather than dividing an item budget by this number.
 """
 
+EMPTY_PAGE_LIMIT: int = 3
+"""Consecutive empty pages tolerated before pagination is considered stalled.
+
+Several ``/followers`` / ``/followees`` endpoints return an endless run of
+empty pages once their server-side enumeration cap (~3020 items) is reached,
+while still reporting ``is_end=false`` and a non-null ``paging.next``.  A
+measured 3.4M-follower account produced roughly 173k such pages.  Three
+consecutive empty pages in a row is a reliable signal that the cap was hit, so
+the walk stops instead of following ``next`` forever.
+"""
+
 
 def _set_query_param(url: str, key: str, value: Any) -> str:
     """Return ``url`` with the query parameter ``key`` set to ``value``.
@@ -39,12 +50,13 @@ def _set_query_param(url: str, key: str, value: Any) -> str:
 class _StreamStats:
     """Mutable bookkeeping shared between :class:`PageStream` and its page loop."""
 
-    __slots__ = ("totals", "truncated", "yielded")
+    __slots__ = ("stalled", "totals", "truncated", "yielded")
 
     def __init__(self) -> None:
         self.totals: int | None = None
         self.yielded = 0
         self.truncated = False
+        self.stalled = False
 
 
 class PageStream(Iterator[Any]):
@@ -55,6 +67,9 @@ class PageStream(Iterator[Any]):
     :ivar yielded: Number of items produced so far.
     :ivar truncated: Whether pagination stopped early because ``max_items`` or
         ``max_pages`` was reached.
+    :ivar stalled: Whether pagination stopped because the server returned
+        :data:`EMPTY_PAGE_LIMIT` consecutive empty pages — a server-side
+        enumeration cap, not a user cap.
     """
 
     def __init__(self, source: Iterator[Any], stats: _StreamStats) -> None:
@@ -102,6 +117,11 @@ class PageStream(Iterator[Any]):
         """Whether the stream stopped early because ``max_items`` or ``max_pages`` was reached."""
         return self._stats.truncated
 
+    @property
+    def stalled(self) -> bool:
+        """Whether pagination stopped because the server returned ``EMPTY_PAGE_LIMIT`` consecutive empty pages (a server-side enumeration cap, not a user cap)."""
+        return self._stats.stalled
+
 
 def _paginate(
     initial_url: str,
@@ -123,6 +143,7 @@ def _paginate(
     yielded_count = 0
     pages_fetched = 0
     stopped_by_limit = False
+    consecutive_empty_pages = 0
 
     while current_url and (max_items is None or yielded_count < max_items):
         if max_pages is not None and pages_fetched >= max_pages:
@@ -152,7 +173,9 @@ def _paginate(
             api_totals = paging.get("totals", 0) or 0
             stats.totals = api_totals or None
 
+        page_has_items = False
         for item in parser(data):
+            page_has_items = True
             yielded_count += 1
             stats.yielded = yielded_count
             yield item
@@ -163,6 +186,18 @@ def _paginate(
 
         if stopped_by_limit:
             break
+
+        if page_has_items:
+            consecutive_empty_pages = 0
+        else:
+            consecutive_empty_pages += 1
+            if consecutive_empty_pages >= EMPTY_PAGE_LIMIT:
+                # The endpoint has hit its server-side enumeration cap and will
+                # keep returning empty pages forever; stop following ``next``.
+                # ``truncated`` stays False so the incomplete-stream warning
+                # still reports the missing tail.
+                stats.stalled = True
+                break
 
         if extract_next:
             current_url = extract_next(data)
