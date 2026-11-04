@@ -25,6 +25,7 @@ from zhihu_cli.output import (
     info,
     item_index,
     print_json,
+    print_markdown,
     section,
     set_json_mode,
 )
@@ -90,33 +91,6 @@ def _render_issue(envelope: dict, *, show_top: bool) -> None:
     if stories:
         section("今日" if show_top else "内容")
         _render_stories(stories)
-
-
-def _print_reading(header: str, markdown: str, reading_mode: bool) -> None:
-    """Print a story, paging through it when Rich is available.
-
-    :param header: Markdown header block with the story's title and metadata.
-    :param markdown: The story body as Markdown.
-    :param reading_mode: Page the output through Rich.  Falls back to plain
-        printing when Rich is not installed.
-    """
-    if reading_mode:
-        try:
-            from rich.console import Console
-            from rich.markdown import Markdown
-        except ImportError:
-            reading_mode = False
-
-    if reading_mode:
-        console = Console()
-        with console.pager(styles=True, links=True):
-            console.print(Markdown(header))
-            if markdown:
-                console.print(Markdown(markdown))
-    else:
-        echo(header)
-        blank()
-        echo(markdown)
 
 
 def register_daily(main_group: click.Group) -> click.Group:
@@ -201,6 +175,6 @@ def register_daily(main_group: click.Group) -> click.Group:
         author = metadata.get("author") or "unknown"
         url = metadata.get("url")
         credit = f"> {author}" + (f" · [原文]({url})" if url else "")
-        _print_reading(f"# {title}\n\n{credit}", markdown, reading_mode)
+        print_markdown(markdown, header=f"# {title}\n\n{credit}", reading_mode=reading_mode)
 
     return main_group

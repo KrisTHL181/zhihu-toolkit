@@ -1,10 +1,11 @@
-import json
+from __future__ import annotations
 
 import matplotlib.pyplot as plt
 import pandas as pd
 import seaborn as sns
 
 from zhihu_cli.content.handlers.cache_manager import cache_manager
+from zhihu_cli.creator_tools._io import load_json
 from zhihu_cli.paths import zhihu_home
 
 DATA_DIR = zhihu_home()
@@ -16,8 +17,7 @@ def plot_weekday_analysis() -> None:
     try:
         OUTPUT_FILE.parent.mkdir(parents=True, exist_ok=True)
         # Load the data
-        with open(INPUT_FILE, encoding="utf-8") as f:
-            data = json.load(f)
+        data = load_json(INPUT_FILE)
 
         df = pd.DataFrame(data["details"])
         df["date"] = pd.to_datetime(df["date"])

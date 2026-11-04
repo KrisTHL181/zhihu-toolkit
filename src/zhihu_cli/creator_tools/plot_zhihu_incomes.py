@@ -1,10 +1,11 @@
-import json
+from __future__ import annotations
 
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 
 from zhihu_cli.content.handlers.cache_manager import cache_manager
+from zhihu_cli.creator_tools._io import load_json
 from zhihu_cli.creator_tools._smoothing import compute_smoothed, smoothing_label
 from zhihu_cli.paths import zhihu_home
 
@@ -16,8 +17,7 @@ OUTPUT_FILE = DATA_DIR / "plots" / "income_analysis.png"
 def plot_analysis() -> None:
     try:
         OUTPUT_FILE.parent.mkdir(parents=True, exist_ok=True)
-        with open(INPUT_FILE, encoding="utf-8") as f:
-            data = json.load(f)
+        data = load_json(INPUT_FILE)
 
         # Convert data to Pandas DataFrame
         df = pd.DataFrame(data["details"])

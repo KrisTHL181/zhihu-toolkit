@@ -1,17 +1,14 @@
 """Zhihu notifications handler."""
 
-import re
+from __future__ import annotations
+
 from typing import Any
 
 from zhihu_cli.content.handlers import fmt_time
 from zhihu_cli.content.handlers.waterfall import PAGE_SIZE, stream_handler
+from zhihu_cli.content.utils.text_clean import strip_html_tags
 
 NOTIFICATIONS_URL = "https://www.zhihu.com/api/v4/notifications/v2/default"
-
-
-def _strip_html(text: str) -> str:
-    """Remove HTML tags from text."""
-    return re.sub(r"<[^>]+>", "", text).strip()
 
 
 def _parse_notification(item: dict[str, Any]) -> dict[str, Any]:
@@ -39,7 +36,7 @@ def _parse_notification(item: dict[str, Any]) -> dict[str, Any]:
         "actor_link": actor_link,
         "target_text": target.get("text", ""),
         "target_link": target.get("link", ""),
-        "comment_text": _strip_html(extend.get("text", "")),
+        "comment_text": strip_html_tags(extend.get("text", "")).strip(),
         "comment_html": target_info.get("content", ""),
         "resource_type": resource_type,
     }

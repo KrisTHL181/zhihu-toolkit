@@ -1,7 +1,8 @@
 """Shared helper functions used across command group modules."""
 
+from __future__ import annotations
+
 import json
-import os
 import re
 import sys
 from pathlib import Path
@@ -9,7 +10,8 @@ from typing import Any
 
 import click
 
-from zhihu_cli.content.handlers import fmt_time, get_type_and_id
+from zhihu_cli.content.handlers import fmt_time, get_type_and_id, split_composite_id
+from zhihu_cli.content.utils.markdown_file import sanitize_filename, write_markdown
 from zhihu_cli.output import (
     blank,
     echo,
@@ -39,9 +41,7 @@ def _parse_item_url(url: str) -> tuple[str, str]:
 
 def _resolve_answer_id(item_id: str) -> str:
     """Extract answer_id from composite 'question_id/answer_id' format."""
-    if "/" in item_id:
-        return item_id.split("/")[1]
-    return item_id
+    return split_composite_id(item_id)
 
 
 def _extract_url_token(token_or_url: str) -> str:
@@ -72,14 +72,6 @@ def _resolve_url_token(url_token: str | None) -> str:
 
 def _save_markdown(metadata: dict, markdown: str, output_dir: str, prefix: str = "") -> str:
     """Save markdown content to output_dir. Returns the file path."""
-    # Imported here rather than at module scope: ``download_contents`` pulls in
-    # ``curl_cffi`` via the session layer, and this module is imported by every
-    # command group at CLI startup.
-    from zhihu_cli.content.download_contents import sanitize_filename
-
-    os.makedirs(output_dir, exist_ok=True)
-    title = sanitize_filename(metadata.get("title", "untitled"))
-
     # author may be a string or a dict (e.g. from scrape_article)
     author_raw = metadata.get("author", "unknown")
     if isinstance(author_raw, dict):
@@ -87,12 +79,10 @@ def _save_markdown(metadata: dict, markdown: str, output_dir: str, prefix: str =
     else:
         author = sanitize_filename(author_raw)
 
+    title = sanitize_filename(metadata.get("title", "untitled"))
     created = sanitize_filename(metadata.get("created_time", "unknown"))
-    filename = f"{prefix}{title}_{author}_{created}.md"[:200]
-    filepath = os.path.join(output_dir, filename)
-    with open(filepath, "w", encoding="utf-8") as f:
-        f.write(markdown)
-    return filepath
+    filename = f"{prefix}{title}_{author}_{created}"
+    return write_markdown(None, markdown, output_dir, filename=filename, with_frontmatter=False)
 
 
 def _read_content(file: str | None) -> str:

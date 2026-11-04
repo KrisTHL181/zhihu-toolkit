@@ -18,6 +18,7 @@ from rich.console import Console
 from rich.table import Table
 
 from zhihu_cli.content.handlers.requests import fetch_page_html, get_page_state
+from zhihu_cli.creator_tools._format import fmt_num, ratio_bar
 
 CREDIT_URL = "https://www.zhihu.com/appview/credit"
 CREDIT_INTERPRET_URL = "https://www.zhihu.com/appview/credit/credit-interpret"
@@ -53,20 +54,6 @@ def _fetch_credit_interpret_data() -> dict[str, Any]:
     return credit_interpret
 
 
-def _fmt_num(n: int) -> str:
-    return f"{n:,}"
-
-
-def _ratio_bar(score: int, max_val: int = 1000, width: int = 16) -> str:
-    """Render a unicode bar showing score / max_val ratio."""
-    if max_val == 0:
-        return ""
-    pct = min(score / max_val, 1.0)
-    filled = int(pct * width)
-    bar = "█" * filled + "░" * (width - filled)
-    return f"{bar} {pct * 100:.0f}%"
-
-
 def _show_history_dimensions(credit_record: list[dict[str, Any]]) -> None:
     """Render a table showing dimension scores across all historical weeks.
 
@@ -98,12 +85,12 @@ def _show_history_dimensions(credit_record: list[dict[str, Any]]) -> None:
 
         row: list[str] = [
             date_str,
-            _fmt_num(ts),
+            fmt_num(ts),
             delta_str,
         ]
         for dim_key in DIMENSION_ORDER:
             score = fields.get(dim_key, 0)
-            row.append(_fmt_num(score))
+            row.append(fmt_num(score))
 
         hist_dim_table.add_row(*row)
 
@@ -138,10 +125,10 @@ def show_salt(json_output: bool = False) -> None:
     overview.add_column("指标", style="cyan", no_wrap=True)
     overview.add_column("数值", justify="right", style="green")
 
-    overview.add_row("当前盐值", f"{_fmt_num(total_score)} / 1000")
+    overview.add_row("当前盐值", f"{fmt_num(total_score)} / 1000")
     overview.add_row("等级", total_status)
     overview.add_row("更新日期", basis_date)
-    overview.add_row("占比", _ratio_bar(total_score, 1000))
+    overview.add_row("占比", ratio_bar(total_score, 1000, width=16))
     console.print(overview)
 
     # ── 2. Dimension breakdown (from creditRecord) ─────────────────────
@@ -159,7 +146,7 @@ def show_salt(json_output: bool = False) -> None:
         for dim_key in DIMENSION_ORDER:
             label = DIMENSION_LABELS.get(dim_key, dim_key)
             score = fields.get(dim_key, 0)
-            dim_table.add_row(label, _fmt_num(score), _ratio_bar(score, 1000))
+            dim_table.add_row(label, fmt_num(score), ratio_bar(score, 1000, width=16))
 
         console.print(dim_table)
 
@@ -185,7 +172,7 @@ def show_salt(json_output: bool = False) -> None:
                 status_icon = "✅" if acquired else "❌"
                 perm_table.add_row(
                     f"[bold]{group_title}[/bold]  {subtitle}",
-                    _fmt_num(required),
+                    fmt_num(required),
                     status_icon,
                 )
 
@@ -206,23 +193,23 @@ def show_salt(json_output: bool = False) -> None:
             if key == "publicEdit":
                 action_table.add_row(
                     label,
-                    f"编辑 {_fmt_num(stat.get('total', 0))} 次  |  "
-                    f"有益问题 {_fmt_num(stat.get('beneficialQuestions', 0))} 个",
+                    f"编辑 {fmt_num(stat.get('total', 0))} 次  |  "
+                    f"有益问题 {fmt_num(stat.get('beneficialQuestions', 0))} 个",
                 )
             elif key == "report":
                 action_table.add_row(
                     label,
-                    f"举报 {_fmt_num(stat.get('total', 0))} 次  |  "
-                    f"有效举报 {_fmt_num(stat.get('effectiveReports', 0))} 次",
+                    f"举报 {fmt_num(stat.get('total', 0))} 次  |  "
+                    f"有效举报 {fmt_num(stat.get('effectiveReports', 0))} 次",
                 )
             elif key == "oppose":
                 stat_display = stat.get("isDisplay", True)
                 if stat_display:
                     action_table.add_row(
                         label,
-                        f"反对 {_fmt_num(stat.get('total', 0))} 次  |  "
-                        f"折叠回答 {_fmt_num(stat.get('collapsedAnswers', 0))} 个  |  "
-                        f"标记回答 {_fmt_num(stat.get('markedAnswers', 0))} 个",
+                        f"反对 {fmt_num(stat.get('total', 0))} 次  |  "
+                        f"折叠回答 {fmt_num(stat.get('collapsedAnswers', 0))} 个  |  "
+                        f"标记回答 {fmt_num(stat.get('markedAnswers', 0))} 个",
                     )
 
         if action_table.row_count > 0:

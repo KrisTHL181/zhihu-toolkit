@@ -8,6 +8,7 @@ because the NLP tools may be used without the base dependency installed.
 
 from __future__ import annotations
 
+import html
 import json
 import re
 from typing import TYPE_CHECKING
@@ -16,6 +17,7 @@ if TYPE_CHECKING:
     from typing import Any
 
 __all__ = [
+    "body_after_frontmatter",
     "clean_excerpt",
     "clean_text",
     "extract_cjk",
@@ -41,6 +43,26 @@ def strip_yaml_frontmatter(text: str) -> str:
         idx = text.find("---", 3)
         if idx != -1:
             return text[idx + 3 :]
+    return text
+
+
+def body_after_frontmatter(text: str) -> str:
+    """Return the document body, dropping any leading metadata block.
+
+    Handles the current YAML frontmatter format and the legacy format in which
+    a JSON object precedes the first ``---`` delimiter. The body is returned
+    verbatim (leading whitespace is preserved) so callers keep their existing
+    behaviour.
+
+    :param text: Raw file content.
+    :returns: The body after the metadata block, or the original text when no
+        frontmatter delimiter is present.
+    """
+    stripped = strip_yaml_frontmatter(text)
+    if stripped != text:
+        return stripped
+    if "---" in text:
+        return text.split("---", 2)[-1]
     return text
 
 
@@ -110,13 +132,16 @@ def strip_code_blocks(text: str) -> str:
     return re.sub(r"```.*?```", "", text, flags=re.DOTALL)
 
 
-def strip_html_tags(text: str) -> str:
+def strip_html_tags(text: str, *, unescape: bool = False) -> str:
     """Remove HTML tags from text.
 
     :param text: Raw text that may contain HTML markup.
-    :returns: Text with every ``<...>`` tag removed.
+    :param unescape: When true, also decode HTML entities after removing the
+        tags.
+    :returns: Text with every ``<...>`` tag removed, optionally unescaped.
     """
-    return re.sub(r"<[^>]+>", "", text)
+    text = re.sub(r"<[^>]+>", "", text)
+    return html.unescape(text) if unescape else text
 
 
 def strip_markdown_noise(text: str) -> str:

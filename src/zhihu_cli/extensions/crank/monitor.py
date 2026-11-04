@@ -18,9 +18,9 @@ import sys
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
-from zhihu_cli.content.download_contents import build_yaml_frontmatter, get_safe_filename, sanitize_filename
 from zhihu_cli.content.handlers.article import scrape_article
 from zhihu_cli.content.utils.llm_config import options, require, save
+from zhihu_cli.content.utils.markdown_file import build_yaml_frontmatter, get_safe_filename, sanitize_filename
 from zhihu_cli.content.utils.wait import wait
 from zhihu_cli.extensions.crank.archiver import (
     call_llm_for_name,

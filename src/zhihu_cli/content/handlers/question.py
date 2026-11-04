@@ -8,7 +8,7 @@ from datetime import datetime
 from typing import Any
 from urllib.parse import urlparse
 
-from zhihu_cli.content.handlers import fmt_time, safe_json
+from zhihu_cli.content.handlers import ANSWER_PATH_RE, canonical_answer_url, fmt_time, safe_json
 from zhihu_cli.content.handlers.requests import fetch_json, fetch_page_html, get_page_state, session
 from zhihu_cli.content.handlers.waterfall import stream_handler
 from zhihu_cli.content.utils.html2markdown import converter
@@ -229,9 +229,6 @@ def unfollow_question(question_id: str) -> dict[str, Any]:
     return safe_json(resp)
 
 
-_ANSWER_PATH_RE = re.compile(r"/answer/(\d+)/?$")
-
-
 def extract_answer_id(answer_url: str) -> str:
     """Extract a numeric answer ID from a Zhihu answer URL or bare ID.
 
@@ -244,7 +241,7 @@ def extract_answer_id(answer_url: str) -> str:
     if candidate.isdigit():
         return candidate
 
-    match = _ANSWER_PATH_RE.search(urlparse(candidate).path)
+    match = ANSWER_PATH_RE.search(urlparse(candidate).path)
     if match:
         return match.group(1)
 
@@ -258,10 +255,7 @@ def _canonical_answer_url(answer_url: str) -> str:
     ``/question/<qid>/answer/<aid>`` URL.  Anything else is returned unchanged
     so the caller sees Zhihu's own error rather than a parse failure.
     """
-    try:
-        return f"https://www.zhihu.com/answer/{extract_answer_id(answer_url)}"
-    except ValueError:
-        return answer_url.strip()
+    return canonical_answer_url(answer_url)
 
 
 def _fetch_answer_entities(answer_url: str) -> dict[str, Any]:

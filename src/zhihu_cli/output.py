@@ -24,11 +24,14 @@ from __future__ import annotations
 
 import json
 import sys
+from contextlib import contextmanager
 from typing import TYPE_CHECKING, Any
 
 import click
 
 if TYPE_CHECKING:
+    from collections.abc import Iterator
+
     from rich import box
     from rich.text import Text
 
@@ -51,6 +54,8 @@ __all__ = [
     "arrow",
     "print_json",
     "print_table",
+    "print_markdown",
+    "markdown_pager",
     "f_title",
     "f_name",
     "f_url",
@@ -231,6 +236,86 @@ def print_json(data: Any) -> None:
 
 
 # ── Rich structured helpers ─────────────────────────────────────────────────
+
+
+@contextmanager
+def markdown_pager(enabled: bool = True) -> Iterator[Any]:
+    """Yield a paging Rich console, or ``None`` when paging is unavailable.
+
+    Paging is disabled when *enabled* is false, when JSON output mode is on (so
+    stdout stays parseable), or when Rich is not installed.
+
+    :param enabled: Whether the caller asked for paging.
+    :returns: A context yielding a :class:`rich.console.Console` inside its
+        pager, or ``None``.
+    """
+    if not enabled or _json_mode:
+        yield None
+        return
+
+    try:
+        from rich.console import Console
+    except ImportError:
+        yield None
+        return
+
+    console = Console()
+    with console.pager(styles=True, links=True):
+        yield console
+
+
+def _print_plain_markdown(header: str | None, markdown: str, blank_between: bool) -> None:
+    """Print Markdown as plain text through :func:`echo`.
+
+    :param header: Optional header block.
+    :param markdown: The body.
+    :param blank_between: Whether to separate the header and the body.
+    """
+    if header:
+        echo(header)
+        if markdown and blank_between:
+            blank()
+    if markdown:
+        echo(markdown)
+
+
+def print_markdown(
+    markdown: str,
+    *,
+    header: str | None = None,
+    reading_mode: bool = False,
+    blank_between: bool = True,
+) -> None:
+    """Print a Markdown header and body, optionally through Rich's pager.
+
+    An empty body is skipped rather than rendered as an empty Markdown block.
+    JSON mode never pages: the plain fallback routes through :func:`echo`,
+    which writes to stderr when JSON mode is active.
+
+    :param markdown: The body as Markdown.
+    :param header: Optional Markdown header block printed before the body.
+    :param reading_mode: Page the output through Rich when available.
+    :param blank_between: In the plain fallback, print a blank line between the
+        header and the body.
+    """
+    if not reading_mode:
+        _print_plain_markdown(header, markdown, blank_between)
+        return
+
+    try:
+        from rich.markdown import Markdown
+    except ImportError:
+        _print_plain_markdown(header, markdown, blank_between)
+        return
+
+    with markdown_pager(reading_mode) as console:
+        if console is None:
+            _print_plain_markdown(header, markdown, blank_between)
+            return
+        if header:
+            console.print(Markdown(header))
+        if markdown:
+            console.print(Markdown(markdown))
 
 
 def print_table(

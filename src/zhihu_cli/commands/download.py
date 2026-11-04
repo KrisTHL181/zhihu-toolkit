@@ -1,5 +1,7 @@
 """Download Zhihu content as Markdown files."""
 
+from __future__ import annotations
+
 import json
 import os
 from pathlib import Path
@@ -10,7 +12,6 @@ from zhihu_cli.commands._helpers import _extract_url_token, _save_markdown
 from zhihu_cli.content.download_contents import (
     ContentDownloader,
     download_media_files,
-    sanitize_filename,
     save_article,
     save_pin,
 )
@@ -30,6 +31,7 @@ from zhihu_cli.content.handlers.question import (
 )
 from zhihu_cli.content.handlers.requests import session
 from zhihu_cli.content.handlers.zvideo import get_best_video_url, scrape_zvideo
+from zhihu_cli.content.utils.markdown_file import safe_path, sanitize_filename
 from zhihu_cli.content.utils.wait import wait
 from zhihu_cli.output import (
     echo,
@@ -102,7 +104,7 @@ def download_question(url: str, output_dir: str, output_json: bool, with_media: 
     # Question detail
     if with_media:
         q_detail_md, _ = download_media_files(q_detail_md, output_dir)
-    filepath = os.path.join(output_dir, f"{title}_question.md")[:200]
+    filepath = safe_path(output_dir, f"{title}_question")
     with open(filepath, "w", encoding="utf-8") as f:
         f.write(f"# {q_meta['title']}\n\n{q_detail_md}\n")
 
@@ -114,7 +116,7 @@ def download_question(url: str, output_dir: str, output_json: bool, with_media: 
         content = ans["content"]
         if with_media:
             content, _ = download_media_files(content, ans_dir)
-        afile = os.path.join(ans_dir, f"{count:04d}_{sanitize_filename(ans['author'])}.md")[:200]
+        afile = safe_path(ans_dir, f"{count:04d}_{sanitize_filename(ans['author'])}")
         with open(afile, "w", encoding="utf-8") as f:
             f.write(f"# Answer by {ans['author']} (+{ans['vote']})\n\n{content}\n")
 
@@ -181,7 +183,7 @@ def download_video(url: str, output_dir: str, output_json: bool, no_download_vid
             os.makedirs(output_dir, exist_ok=True)
             title = sanitize_filename(metadata.get("title", "video"))
             ext = ".mp4"
-            video_path = os.path.join(output_dir, f"{title}{ext}")[:200]
+            video_path = safe_path(output_dir, title, ext=ext)
             info(f"Downloading video ({metadata.get('quality_tiers', [{}])[0].get('tier', 'best')} quality)...")
             try:
                 resp = session.get(video_url, timeout=300, stream=True)

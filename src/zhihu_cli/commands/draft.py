@@ -1,5 +1,7 @@
 """Draft command group for zhihu-cli."""
 
+from __future__ import annotations
+
 import click
 
 from zhihu_cli.commands._helpers import _read_content
@@ -13,6 +15,7 @@ from zhihu_cli.content.handlers.draft import (
     upload_draft,
 )
 from zhihu_cli.content.utils.markdown2html import markdown2html
+from zhihu_cli.content.utils.text_clean import strip_html_tags
 from zhihu_cli.output import (
     blank,
     echo,
@@ -248,9 +251,7 @@ def register_draft(main_group):
 
     def truncate_html(html: str, max_len: int) -> str:
         """Strip HTML tags and truncate to *max_len* chars."""
-        import re
-
-        text = re.sub(r"<[^>]+>", "", html).strip()
+        text = strip_html_tags(html).strip()
         if len(text) > max_len:
             return text[: max_len - 1] + "…"
         return text

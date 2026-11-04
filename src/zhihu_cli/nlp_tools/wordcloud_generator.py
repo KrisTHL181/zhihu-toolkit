@@ -13,10 +13,10 @@ from wordcloud import WordCloud
 
 from zhihu_cli.content.handlers.cache_manager import cache_manager
 from zhihu_cli.content.utils.text_clean import (
+    body_after_frontmatter,
     extract_cjk,
     parse_frontmatter,
     strip_markdown_noise,
-    strip_yaml_frontmatter,
 )
 from zhihu_cli.nlp_tools import FONT_PATH, STOP_WORDS
 from zhihu_cli.paths import zhihu_home
@@ -56,9 +56,7 @@ def extract_text_from_md(file_path: str, skip_metadata: bool = False) -> str:
     # the frontmatter; for legacy JSON-line files (and plain files with a
     # ``---`` separator) fall back to the historical split so the body matches
     # the previous behaviour.
-    body = strip_yaml_frontmatter(content)
-    if body == content and "---" in content:
-        body = content.split("---", 2)[-1]
+    body = body_after_frontmatter(content)
     text_to_analyze += body
 
     return text_to_analyze

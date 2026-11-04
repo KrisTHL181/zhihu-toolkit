@@ -14,9 +14,27 @@ from zhihu_cli.content.handlers.pin import scrape_pin
 from zhihu_cli.content.handlers.question import scrape_answer_page
 from zhihu_cli.content.handlers.requests import reload_session, session
 from zhihu_cli.content.utils.html2markdown import PageToMarkdown
+from zhihu_cli.content.utils.markdown_file import (
+    build_yaml_frontmatter,
+    get_safe_filename,
+    sanitize_filename,
+    write_markdown,
+)
 from zhihu_cli.content.utils.wait import wait
 from zhihu_cli.daemon.proxy import DaemonHTTPError
 from zhihu_cli.paths import zhihu_home
+
+__all__ = [
+    "ContentDownloader",
+    "build_yaml_frontmatter",
+    "download_media_files",
+    "extract_config_from_curl",
+    "extract_metadata_from_html",
+    "get_safe_filename",
+    "sanitize_filename",
+    "save_article",
+    "save_pin",
+]
 
 # ── helpers ──────────────────────────────────────────────────────────────────
 
@@ -197,81 +215,6 @@ def extract_metadata_from_html(html_content: str) -> dict[str, str]:
     return metadata
 
 
-def sanitize_filename(name: str) -> str:
-    """Sanitize filename by removing illegal characters."""
-    import html
-
-    name = html.unescape(name)
-    if os.name == "nt":
-        illegal_chars = ["<", ">", ":", '"', "/", "\\", "|", "?", "*"]
-        illegal_filenames = [
-            "CON",
-            "PRN",
-            "AUX",
-            "NUL",
-            "COM1",
-            "COM2",
-            "COM3",
-            "COM4",
-            "COM5",
-            "COM6",
-            "COM7",
-            "COM8",
-            "COM9",
-            "LPT1",
-            "LPT2",
-            "LPT3",
-            "LPT4",
-            "LPT5",
-            "LPT6",
-            "LPT7",
-            "LPT8",
-            "LPT9",
-        ]
-    else:
-        illegal_chars = ["/", "\0"]
-        illegal_filenames = []
-
-    for char in illegal_chars:
-        name = name.replace(char, "_")
-    base_name = os.path.splitext(name)[0]
-    if base_name.upper() in illegal_filenames:
-        name = f"_{name}_"
-    name = name.rstrip(". ")
-    name = re.sub(r"_+", "_", name)
-    return name.strip().strip("_")
-
-
-def get_safe_filename(long_title: str, ext: str = ".md", max_bytes: int = 240) -> str:
-    """Truncate title to fit within max_bytes UTF-8 bytes, preserving whole characters."""
-    ext_bytes = len(ext.encode("utf-8"))
-    available_bytes = max_bytes - ext_bytes
-
-    if len(long_title.encode("utf-8")) <= available_bytes:
-        return long_title + ext
-
-    current_bytes = 0
-    truncated_title = ""
-
-    for char in long_title:
-        char_bytes = len(char.encode("utf-8"))
-        if current_bytes + char_bytes <= available_bytes:
-            truncated_title += char
-            current_bytes += char_bytes
-        else:
-            break
-
-    return f"{truncated_title}...{ext}"
-
-
-def build_yaml_frontmatter(metadata: dict[str, str]) -> str:
-    """Build a YAML frontmatter block from a metadata dict."""
-    import yaml  # deferred: only needed when writing download files
-
-    body = yaml.safe_dump(metadata, allow_unicode=True, sort_keys=False).strip()
-    return f"---\n{body}\n---\n\n"
-
-
 def save_article(url: str, metadata: dict[str, str], markdown: str, output_dir: str, with_media: bool = False) -> str:
     """Save a downloaded article as Markdown with YAML frontmatter.
 
@@ -286,16 +229,9 @@ def save_article(url: str, metadata: dict[str, str], markdown: str, output_dir: 
     author = sanitize_filename(metadata.get("author", "unknown"))
     created = metadata.get("created", "") or "unknown"
     full_name = f"{title}_{author}_{created}"
-    filename = get_safe_filename(full_name, ext=".md", max_bytes=240)
-    filepath = os.path.join(output_dir, filename)
 
     meta = {**metadata, "source": url}
-    file_content = build_yaml_frontmatter(meta) + markdown
-
-    os.makedirs(output_dir, exist_ok=True)
-    with open(filepath, "w", encoding="utf-8") as f:
-        f.write(file_content)
-    return filepath
+    return write_markdown(meta, markdown, output_dir, filename=full_name)
 
 
 def save_pin(url: str, metadata: dict[str, str], markdown: str, output_dir: str, with_media: bool = False) -> str:
@@ -315,16 +251,9 @@ def save_pin(url: str, metadata: dict[str, str], markdown: str, output_dir: str,
     if not preview:
         preview = metadata.get("pin_id", "unknown")
     full_name = f"{author}_{created}_{preview}"
-    filename = get_safe_filename(full_name, ext=".md", max_bytes=240)
-    filepath = os.path.join(output_dir, filename)
 
     meta = {**metadata, "source": url}
-    file_content = build_yaml_frontmatter(meta) + markdown
-
-    os.makedirs(output_dir, exist_ok=True)
-    with open(filepath, "w", encoding="utf-8") as f:
-        f.write(file_content)
-    return filepath
+    return write_markdown(meta, markdown, output_dir, filename=full_name)
 
 
 class ContentDownloader:

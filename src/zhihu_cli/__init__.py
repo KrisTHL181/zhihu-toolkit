@@ -189,6 +189,7 @@ _LAZY_EXPORTS: dict[str, str] = {
         (name for name in __all__ if name not in _CONTENT_EXPORTS and name not in _EAGER_EXPORTS),
         "zhihu_cli.api",
     ),
+    "sanitize_filename": "zhihu_cli.content.utils.markdown_file",
 }
 
 

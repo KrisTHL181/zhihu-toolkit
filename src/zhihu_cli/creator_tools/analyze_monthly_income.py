@@ -6,9 +6,10 @@ Provides the data layer and styled terminal output for
 
 from __future__ import annotations
 
-import json
 from collections import defaultdict
 from datetime import date, timedelta
+
+from zhihu_cli.creator_tools._io import load_json
 
 
 def _next_weekday(d: date, weekday: int) -> date:
@@ -71,8 +72,7 @@ def get_monthly_income_data(file_path: str) -> dict:
               or ``{"error": str}`` on failure.
     """
     try:
-        with open(file_path, encoding="utf-8") as f:
-            data = json.load(f)
+        data = load_json(file_path)
 
         monthly_stats: defaultdict[str, float] = defaultdict(float)
 

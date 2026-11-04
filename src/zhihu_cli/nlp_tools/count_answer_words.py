@@ -7,7 +7,7 @@ from pathlib import Path
 import matplotlib.pyplot as plt
 import numpy as np
 
-from zhihu_cli.content.utils.text_clean import strip_code_blocks, strip_latex, strip_yaml_frontmatter
+from zhihu_cli.content.utils.text_clean import body_after_frontmatter, strip_code_blocks, strip_latex
 from zhihu_cli.paths import zhihu_home
 
 
@@ -29,10 +29,7 @@ def count_words(filepath: str, no_code: bool = False, no_latex: bool = False, no
         # contributes nothing when frontmatter is excluded.
         if "---" not in content:
             return 0
-        body = strip_yaml_frontmatter(content)
-        if body == content:
-            # Legacy JSON-line files (and plain files with a ``---`` separator).
-            body = content.split("---", 2)[-1]
+        body = body_after_frontmatter(content)
     else:
         body = content
 

@@ -10,6 +10,7 @@ from rich.console import Console
 from rich.table import Table
 
 from zhihu_cli.content.handlers.requests import fetch_page_html, get_page_state
+from zhihu_cli.creator_tools._format import fmt_num, ratio_bar
 
 GROWTH_URL = "https://www.zhihu.com/creator/account/growth-level"
 
@@ -27,19 +28,6 @@ def _fetch_score_info() -> dict[str, Any]:
     html_text = fetch_page_html(GROWTH_URL)
     creators = get_page_state(html_text, "creators")
     return creators["home"]["scoreInfo"]
-
-
-def _fmt_num(n: int) -> str:
-    return f"{n:,}"
-
-
-def _ratio_bar(score: int, max_val: int, width: int = 14) -> str:
-    if max_val == 0:
-        return ""
-    pct = min(score / max_val, 1.0)
-    filled = int(pct * width)
-    bar = "█" * filled + "░" * (width - filled)
-    return f"{bar} {pct * 100:.0f}%"
 
 
 def show_growth_level(json_output: bool = False) -> None:
@@ -72,12 +60,12 @@ def show_growth_level(json_output: bool = False) -> None:
         dim_max = indicators[i]["max"]
         table.add_row(
             label,
-            _fmt_num(scores[i]),
-            _fmt_num(avg_scores[i]),
-            _fmt_num(values[i]),
-            _fmt_num(avg_values[i]),
-            _fmt_num(dim_max),
-            _ratio_bar(scores[i], dim_max),
+            fmt_num(scores[i]),
+            fmt_num(avg_scores[i]),
+            fmt_num(values[i]),
+            fmt_num(avg_values[i]),
+            fmt_num(dim_max),
+            ratio_bar(scores[i], dim_max),
         )
 
     console.print(table)
@@ -100,10 +88,10 @@ def show_growth_level(json_output: bool = False) -> None:
     summary.add_column("数值", justify="right", style="green")
     summary.add_row("分数类型", score_text)
     summary.add_row("创作等级", f"Lv.{level}" + (f" (上期 Lv.{last_level})" if last_level is not None else ""))
-    summary.add_row("创作总分", f"{_fmt_num(total_score)} / {_fmt_num(total_upper)} ({ratio}%)")
+    summary.add_row("创作总分", f"{fmt_num(total_score)} / {fmt_num(total_upper)} ({ratio}%)")
     if last_ratio is not None:
         summary.add_row("上期占比", f"{last_ratio}%")
-    summary.add_row("昨日增长", f"+{_fmt_num(yesterday)}")
+    summary.add_row("昨日增长", f"+{fmt_num(yesterday)}")
     if creator_score_ab is not None:
         summary.add_row("AB 分组", "A" if creator_score_ab == 0 else "B")
     if updated_ts:

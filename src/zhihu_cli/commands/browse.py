@@ -1,5 +1,7 @@
 """Browse Zhihu content in the terminal."""
 
+from __future__ import annotations
+
 import itertools
 import json
 
@@ -64,7 +66,9 @@ from zhihu_cli.output import (
     f_url,
     info,
     item_index,
+    markdown_pager,
     print_json,
+    print_markdown,
     set_json_mode,
     success,
     warning,
@@ -87,32 +91,6 @@ def _collapse_tag(ans: dict) -> str:
     if collapsed_by:
         parts.append(collapsed_by)
     return " · ".join(parts)
-
-
-def _print_reading(header: str, markdown: str, reading_mode: bool) -> None:
-    """Print a piece of content, paging through it when Rich is available.
-
-    :param header: Markdown header block with the item's title and metadata.
-    :param markdown: The item body as Markdown.
-    :param reading_mode: Page the output through Rich. Falls back to plain
-        printing when Rich is not installed.
-    """
-    if reading_mode:
-        try:
-            from rich.console import Console
-            from rich.markdown import Markdown
-        except ImportError:
-            reading_mode = False
-
-    if reading_mode:
-        console = Console()
-        with console.pager(styles=True, links=True):
-            console.print(Markdown(header))
-            console.print(Markdown(markdown))
-    else:
-        echo(header)
-        blank()
-        echo(markdown)
 
 
 def register_browse(main_group):
@@ -205,7 +183,6 @@ def register_browse(main_group):
 
         if reading_mode:
             try:
-                from rich.console import Console
                 from rich.markdown import Markdown
                 from rich.markup import escape
             except ImportError:
@@ -213,8 +190,7 @@ def register_browse(main_group):
 
         question_md = f"# {q_meta['title']}\n\n{q_detail_md}"
         if reading_mode:
-            console = Console()
-            with console.pager(styles=True, links=True):
+            with markdown_pager(reading_mode) as console:
                 console.print(Markdown(question_md))
                 for i, ans in enumerate(answers, 1):
                     time_str = _format_time_pair(ans.get("created_time"), ans.get("updated_time"))
@@ -279,7 +255,7 @@ def register_browse(main_group):
             f"**Upvotes:** {upvotes} | **Comments:** {comments} | **Favorites:** {favorites}"
         )
 
-        _print_reading(header, markdown, reading_mode)
+        print_markdown(markdown, header=header, reading_mode=reading_mode)
 
     @browse.command("article")
     @click.argument("url")
@@ -306,7 +282,7 @@ def register_browse(main_group):
             f"**Upvotes:** {upvotes} | **Comments:** {comments} | **Favorites:** {favorites}"
         )
 
-        _print_reading(header, markdown, reading_mode)
+        print_markdown(markdown, header=header, reading_mode=reading_mode)
 
     @browse.command("pin")
     @click.argument("url")
@@ -334,7 +310,7 @@ def register_browse(main_group):
             f"**Upvotes:** {upvotes} | **Comments:** {comments}"
         )
 
-        _print_reading(header, markdown, reading_mode)
+        print_markdown(markdown, header=header, reading_mode=reading_mode)
 
     @browse.command("log")
     @click.argument("url")
@@ -879,19 +855,7 @@ def register_browse(main_group):
         body = segments_to_text(segments)
         full_text = f"{header}\n\n{body}" if header else body
 
-        if reading_mode:
-            try:
-                from rich.console import Console
-                from rich.markdown import Markdown
-            except ImportError:
-                reading_mode = False
-
-        if reading_mode:
-            console = Console()
-            with console.pager(styles=True, links=True):
-                console.print(Markdown(full_text))
-        else:
-            echo(full_text)
+        print_markdown(full_text, reading_mode=reading_mode)
 
         if output:
             with open(output, "w", encoding="utf-8") as f:

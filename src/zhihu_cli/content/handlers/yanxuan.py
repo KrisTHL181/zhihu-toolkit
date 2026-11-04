@@ -14,7 +14,6 @@ that came with the response.  See
 
 from __future__ import annotations
 
-import html
 import json
 import re
 from collections.abc import Iterable
@@ -22,8 +21,10 @@ from dataclasses import dataclass
 from typing import Any
 from urllib.parse import parse_qs, urlencode, urlparse
 
+from zhihu_cli.content.handlers import ANSWER_PATH_RE, split_composite_id
 from zhihu_cli.content.handlers.requests import session
 from zhihu_cli.content.handlers.waterfall import stream_handler
+from zhihu_cli.content.utils.text_clean import strip_html_tags
 
 NEXT_CONTENT_RENDER = "https://api.zhihu.com/next-content-render"
 
@@ -50,11 +51,11 @@ def extract_url_token(input_str: str) -> str:
             return pc_match.group(2)
 
         # /question/<qid>/answer/<aid>
-        m = re.search(r"/answer/(\d+)", input_str)
+        parsed = urlparse(input_str)
+        m = ANSWER_PATH_RE.search(parsed.path)
         if m:
             return m.group(1)
         # Try to extract from path as fallback
-        parsed = urlparse(input_str)
         qs = parse_qs(parsed.query)
         if "url_token" in qs:
             return qs["url_token"][0]
@@ -66,7 +67,7 @@ def extract_url_token(input_str: str) -> str:
 
     # Composite ID like "question_id/answer_id"
     if "/" in input_str:
-        return input_str.split("/")[1]
+        return split_composite_id(input_str)
 
     return input_str
 
@@ -186,9 +187,6 @@ def _extract_ssr_state(html: str) -> dict[str, Any]:
 #: Matches one ``<p>…</p>`` paragraph of the SSR ``manuscript`` field.
 _PARAGRAPH_RE = re.compile(r"<p[^>]*>(.*?)</p>", re.S)
 
-#: Matches any HTML tag left inside a paragraph once it has been extracted.
-_TAG_RE = re.compile(r"<[^>]+>")
-
 #: The trailing watermark paragraph of every manuscript body.
 _WATERMARK_PREFIX = "备案号"
 
@@ -213,7 +211,7 @@ def _paragraphs_from_manuscript(manuscript: str, p_tag_list: list[str]) -> list[
 
     paragraphs: list[str] = []
     for fragment in fragments:
-        text = html.unescape(_TAG_RE.sub("", fragment)).strip()
+        text = strip_html_tags(fragment, unescape=True).strip()
         if text:
             paragraphs.append(text)
 

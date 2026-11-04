@@ -5,10 +5,9 @@ from __future__ import annotations
 from collections.abc import Iterable
 from typing import Any
 
-from zhihu_cli.content.handlers import fmt_time
+from zhihu_cli.content.handlers import MEMBER_API, fmt_time
 from zhihu_cli.content.handlers.waterfall import PAGE_SIZE, stream_handler
 
-MEMBER_API = "https://www.zhihu.com/api/v4/members/{token}"
 TOPIC_FOLLOWING_API = "https://www.zhihu.com/api/v5.1/topics/{token}/following_topics_contributions"
 
 

@@ -37,7 +37,7 @@ _LAZY_EXPORTS = {
     "ContentDownloader": "zhihu_cli.content.download_contents",
     "extract_config_from_curl": "zhihu_cli.content.download_contents",
     "extract_metadata_from_html": "zhihu_cli.content.download_contents",
-    "sanitize_filename": "zhihu_cli.content.download_contents",
+    "sanitize_filename": "zhihu_cli.content.utils.markdown_file",
     "cache_manager": "zhihu_cli.content.handlers.cache_manager",
     "PageToMarkdown": "zhihu_cli.content.utils.html2markdown",
 }

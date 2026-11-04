@@ -1,3 +1,7 @@
+"""Incrementally fetch and persist the creator income report."""
+
+from __future__ import annotations
+
 import csv
 import json
 import os
@@ -8,6 +12,7 @@ from typing import Any
 from zhihu_cli.content.handlers.cache_manager import cache_manager
 from zhihu_cli.content.handlers.requests import session
 from zhihu_cli.content.utils.wait import wait
+from zhihu_cli.creator_tools._io import load_json
 from zhihu_cli.paths import zhihu_home
 
 DB_FILE: str = str(zhihu_home() / "exports" / "zhihu_income_report.json")
@@ -18,14 +23,13 @@ def load_existing_data() -> tuple[list[dict[str, Any]], datetime]:
     """Load existing data. Returns (old_data_list, next_fetch_start_date)."""
     if os.path.exists(DB_FILE):
         try:
-            with open(DB_FILE, encoding="utf-8") as f:
-                data = json.load(f)
-                details = data.get("details", [])
-                if details:
-                    last_date_str = max(item["date"] for item in details)
-                    last_dt = datetime.strptime(last_date_str, "%Y-%m-%d")
-                    next_start = last_dt + timedelta(days=1)
-                    return details, next_start
+            data = load_json(DB_FILE)
+            details = data.get("details", [])
+            if details:
+                last_date_str = max(item["date"] for item in details)
+                last_dt = datetime.strptime(last_date_str, "%Y-%m-%d")
+                next_start = last_dt + timedelta(days=1)
+                return details, next_start
         except Exception as e:
             print(f"[!] Failed to read existing data: {e}, will re-fetch")
 

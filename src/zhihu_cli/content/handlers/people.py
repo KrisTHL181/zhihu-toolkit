@@ -1,15 +1,13 @@
 from __future__ import annotations
 
 import itertools
-import re
 from collections.abc import Iterable
 from typing import Any
 
-from zhihu_cli.content.handlers import fmt_time, safe_json
+from zhihu_cli.content.handlers import MEMBER_API, fmt_time, safe_json
 from zhihu_cli.content.handlers.requests import session
 from zhihu_cli.content.handlers.waterfall import PAGE_SIZE, stream_handler
-
-MEMBER_API = "https://www.zhihu.com/api/v4/members/{token}"
+from zhihu_cli.content.utils.text_clean import strip_html_tags
 
 
 def follow(user_id: str) -> dict[str, Any]:
@@ -203,7 +201,7 @@ def _parse_member_pin(item: dict[str, Any]) -> dict[str, Any]:
     if isinstance(content, list):
         content = "\n".join(block.get("content", "") if isinstance(block, dict) else str(block) for block in content)
 
-    clean_title = re.sub(r"<[^>]+>", "", item.get("excerpt", "") or content or "").strip()[:100]
+    clean_title = strip_html_tags(item.get("excerpt", "") or content or "").strip()[:100]
 
     return {
         "type": "pin",
@@ -311,7 +309,7 @@ def _parse_activity_item(raw: dict[str, Any]) -> dict[str, Any]:
     if not title and target.get("question"):
         title = target["question"].get("title", "")
     if isinstance(title, str):
-        title = re.sub(r"<[^>]+>", "", title).strip()
+        title = strip_html_tags(title).strip()
 
     # Build URL (strip query params like ?native=0)
     url = target.get("url", "")
@@ -333,7 +331,7 @@ def _parse_activity_item(raw: dict[str, Any]) -> dict[str, Any]:
     # Excerpt
     excerpt = target.get("excerpt", "") or target.get("excerpt_new", "")
     if isinstance(excerpt, str):
-        excerpt = re.sub(r"<[^>]+>", "", excerpt).strip()[:200]
+        excerpt = strip_html_tags(excerpt).strip()[:200]
 
     return {
         "id": raw.get("id", ""),

@@ -11,7 +11,7 @@ import networkx as nx
 import numpy as np
 import plotly.graph_objects as go
 
-from zhihu_cli.content.utils.text_clean import extract_cjk, strip_markdown_noise, strip_yaml_frontmatter
+from zhihu_cli.content.utils.text_clean import body_after_frontmatter, extract_cjk, strip_markdown_noise
 from zhihu_cli.nlp_tools import STOP_WORDS
 from zhihu_cli.paths import zhihu_home
 
@@ -31,10 +31,7 @@ def load_and_tokenize(source_dir: str) -> tuple[list[list[str]], Counter[str]]:
                     with open(file_path, encoding="utf-8") as f:
                         content = f.read()
 
-                    text = strip_yaml_frontmatter(content)
-                    if text == content and "---" in content:
-                        # Legacy JSON-line files (and plain files with a ``---`` separator).
-                        text = content.split("---", 2)[-1]
+                    text = body_after_frontmatter(content)
                     text = extract_cjk(strip_markdown_noise(text), keep_latin=True)
 
                     words = [w for w in jieba.lcut(text) if len(w) > 1 and w not in STOP_WORDS]

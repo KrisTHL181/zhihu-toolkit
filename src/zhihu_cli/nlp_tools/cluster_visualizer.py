@@ -16,10 +16,10 @@ from sklearn.manifold import TSNE
 from sklearn.metrics import silhouette_score
 
 from zhihu_cli.content.utils.text_clean import (
+    body_after_frontmatter,
     extract_cjk,
     parse_frontmatter,
     strip_markdown_noise,
-    strip_yaml_frontmatter,
 )
 from zhihu_cli.nlp_tools import STOP_WORDS as stop_words
 from zhihu_cli.paths import zhihu_home
@@ -77,10 +77,7 @@ def _extract_document_text(content: str) -> str | None:
     :param content: Raw markdown file content.
     :returns: Space-joined tokenized text, or ``None``.
     """
-    text = strip_yaml_frontmatter(content)
-    if text == content and "---" in content:
-        # Legacy JSON-line files (and plain files with a ``---`` separator).
-        text = content.split("---", 2)[-1]
+    text = body_after_frontmatter(content)
     text = extract_cjk(strip_markdown_noise(text), keep_latin=True)
 
     words = jieba.cut(text)

@@ -2,13 +2,12 @@
 
 from __future__ import annotations
 
-import json
-
 import matplotlib.pyplot as plt
 import matplotlib.ticker as mticker
 import pandas as pd
 
 from zhihu_cli.content.handlers.cache_manager import cache_manager
+from zhihu_cli.creator_tools._io import load_json
 from zhihu_cli.creator_tools._smoothing import compute_smoothed, smoothing_label
 from zhihu_cli.paths import zhihu_home
 
@@ -21,8 +20,7 @@ def plot_follower_detail() -> None:
     """Generate a multi-panel line chart visualizing follower trends over time."""
     try:
         OUTPUT_FILE.parent.mkdir(parents=True, exist_ok=True)
-        with open(INPUT_FILE, encoding="utf-8") as f:
-            data = json.load(f)
+        data = load_json(INPUT_FILE)
 
         df = pd.DataFrame(data["list"])
         df["date"] = pd.to_datetime(df["date"])

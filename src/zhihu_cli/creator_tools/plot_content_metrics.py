@@ -10,6 +10,7 @@ import numpy as np
 import pandas as pd
 
 from zhihu_cli.content.handlers.cache_manager import cache_manager
+from zhihu_cli.creator_tools._io import load_json
 from zhihu_cli.creator_tools._smoothing import compute_smoothed, smoothing_label
 from zhihu_cli.paths import zhihu_home
 
@@ -114,8 +115,7 @@ def plot_content_metrics(no_pv: bool = False, no_show: bool = False) -> None:
 
         for fp in json_files:
             try:
-                with open(fp, encoding="utf-8") as f:
-                    data = json.load(f)
+                data = load_json(fp)
             except (json.JSONDecodeError, OSError) as e:
                 print(f"  [Skip] Failed to read {fp.name}: {e}")
                 continue

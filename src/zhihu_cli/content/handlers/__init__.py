@@ -4,6 +4,7 @@ import re
 from datetime import datetime
 from pathlib import Path
 from typing import TYPE_CHECKING
+from urllib.parse import urlparse
 
 from zhihu_cli.paths import zhihu_home
 
@@ -47,6 +48,59 @@ ZHIHU_ZVIDEO_PATTERN = r"https?://(?:www\.)?zhihu\.com/zvideo/(\d+)"
 ZHIHU_COLLECTION_PATTERN = r"https?://(?:www\.)?zhihu\.com/collection/(\d+)"
 ZHIHU_CONSULT_CONVERSATION_PATTERN = r"https?://(?:www\.)?zhihu\.com/consult/conversation/(\d+)(?:/answer)?"
 ZHIHU_PAID_COLUMN_SECTION_PATTERN = r"https?://(?:www\.)?zhihu\.com/market/paid_column/(\d+)/section/(\d+)"
+
+#: Matches the ``/answer/<id>`` suffix of an answer path.
+ANSWER_PATH_RE = re.compile(r"/answer/(\d+)/?$")
+#: Matches a ``/pin/<id>`` path segment.
+PIN_PATH_RE = re.compile(r"/pin/([^/?#]+)")
+#: Member profile API template; ``{token}`` is the user's ``url_token``.
+MEMBER_API = "https://www.zhihu.com/api/v4/members/{token}"
+
+
+def split_composite_id(item_id: str) -> str:
+    """Extract the trailing ID from a composite ``parent/child`` ID.
+
+    :param item_id: A bare ID or a composite ``question_id/answer_id`` style ID.
+    :returns: The part after the slash, or the input unchanged when there is no
+        slash.
+    """
+    if "/" in item_id:
+        return item_id.split("/")[1]
+    return item_id
+
+
+def canonical_answer_url(ref: str) -> str:
+    """Normalise an answer reference to ``https://www.zhihu.com/answer/<id>``.
+
+    :param ref: A bare answer ID, a short answer URL, or a
+        ``/question/<qid>/answer/<aid>`` URL.
+    :returns: The canonical URL, or the stripped input when it cannot be
+        parsed.
+    """
+    candidate = ref.strip()
+    if candidate.isdigit():
+        return f"https://www.zhihu.com/answer/{candidate}"
+
+    match = ANSWER_PATH_RE.search(urlparse(candidate).path)
+    if match:
+        return f"https://www.zhihu.com/answer/{match.group(1)}"
+    return candidate
+
+
+def canonical_pin_url(ref: str) -> str:
+    """Normalise a pin reference to ``https://www.zhihu.com/pin/<id>``.
+
+    :param ref: A bare pin ID/token or a full ``/pin/<id>`` URL.
+    :returns: The canonical URL, or the stripped input when it cannot be
+        parsed.
+    """
+    candidate = ref.strip()
+    if candidate.startswith(("http://", "https://")):
+        match = PIN_PATH_RE.search(urlparse(candidate).path)
+        if match:
+            return f"https://www.zhihu.com/pin/{match.group(1)}"
+        return candidate
+    return f"https://www.zhihu.com/pin/{candidate}"
 
 
 def get_type_and_id(url: str) -> tuple[str | None, str | None]:

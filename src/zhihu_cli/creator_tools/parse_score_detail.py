@@ -11,6 +11,7 @@ from typing import Any
 from zhihu_cli.content.handlers.cache_manager import cache_manager
 from zhihu_cli.content.handlers.requests import fetch_json
 from zhihu_cli.content.handlers.waterfall import stream_handler
+from zhihu_cli.creator_tools._io import load_json
 from zhihu_cli.paths import zhihu_home
 
 DB_FILE: str = str(zhihu_home() / "exports" / "creator_score_detail.json")
@@ -29,14 +30,13 @@ def _date_to_ts(date_str: str, end_of_day: bool = False) -> int:
 def load_existing_data() -> tuple[list[dict[str, Any]], str]:
     if os.path.exists(DB_FILE):
         try:
-            with open(DB_FILE, encoding="utf-8") as f:
-                data = json.load(f)
-                details = data.get("details", [])
-                if details:
-                    last_date_str = max(item["p_date"] for item in details)
-                    last_dt = datetime.strptime(last_date_str, "%Y-%m-%d")
-                    next_start = last_dt + timedelta(days=1)
-                    return details, next_start.strftime("%Y-%m-%d")
+            data = load_json(DB_FILE)
+            details = data.get("details", [])
+            if details:
+                last_date_str = max(item["p_date"] for item in details)
+                last_dt = datetime.strptime(last_date_str, "%Y-%m-%d")
+                next_start = last_dt + timedelta(days=1)
+                return details, next_start.strftime("%Y-%m-%d")
         except Exception as e:
             print(f"[!] Failed to read existing data: {e}, will re-fetch")
 

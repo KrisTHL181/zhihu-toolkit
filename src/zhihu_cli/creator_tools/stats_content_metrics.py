@@ -14,6 +14,8 @@ import statistics
 import unicodedata
 from collections import defaultdict
 
+from zhihu_cli.creator_tools._format import fmt_num
+from zhihu_cli.creator_tools._io import load_json
 from zhihu_cli.output import (
     blank,
     divider,
@@ -173,17 +175,6 @@ def _compute_stats(values: list[float]) -> dict:
         "q1": sorted_vals[n // 4] if n >= 4 else sorted_vals[0],
         "q3": sorted_vals[3 * n // 4] if n >= 4 else sorted_vals[-1],
     }
-
-
-def _fmt_num(value: float, is_int: bool = True) -> str:
-    """Format a number for display — integers get comma grouping; floats get 2 decimal places.
-
-    :param value: The numeric value.
-    :param is_int: If True, treat as integer (comma grouping, no decimals).
-    """
-    if is_int:
-        return f"{int(value):,}"
-    return f"{value:.2f}"
 
 
 def _is_integer_metric(key: str) -> bool:
@@ -455,15 +446,15 @@ def _display_daily_stats(stats: dict, merged: bool = False) -> None:
         rows.append(
             [
                 METRIC_LABELS[key],
-                _fmt_num(s["count"]),
-                _fmt_num(s["sum"], is_int),
-                _fmt_num(s["mean"], is_int),
-                _fmt_num(s["median"], is_int),
-                _fmt_num(s["std"], is_int),
-                _fmt_num(s["q1"], is_int),
-                _fmt_num(s["q3"], is_int),
-                _fmt_num(s["min"], is_int),
-                _fmt_num(s["max"], is_int),
+                fmt_num(s["count"]),
+                fmt_num(s["sum"], is_int),
+                fmt_num(s["mean"], is_int),
+                fmt_num(s["median"], is_int),
+                fmt_num(s["std"], is_int),
+                fmt_num(s["q1"], is_int),
+                fmt_num(s["q3"], is_int),
+                fmt_num(s["min"], is_int),
+                fmt_num(s["max"], is_int),
             ]
         )
     print_table(title=None, columns=columns, rows=rows)
@@ -480,15 +471,15 @@ def _display_daily_stats(stats: dict, merged: bool = False) -> None:
             ext_rows.append(
                 [
                     EXTRA_METRIC_LABELS.get(key, key),
-                    _fmt_num(s["count"]),
-                    _fmt_num(s["sum"], is_int),
-                    _fmt_num(s["mean"], is_int),
-                    _fmt_num(s["median"], is_int),
-                    _fmt_num(s["std"], is_int),
-                    _fmt_num(s["q1"], is_int),
-                    _fmt_num(s["q3"], is_int),
-                    _fmt_num(s["min"], is_int),
-                    _fmt_num(s["max"], is_int),
+                    fmt_num(s["count"]),
+                    fmt_num(s["sum"], is_int),
+                    fmt_num(s["mean"], is_int),
+                    fmt_num(s["median"], is_int),
+                    fmt_num(s["std"], is_int),
+                    fmt_num(s["q1"], is_int),
+                    fmt_num(s["q3"], is_int),
+                    fmt_num(s["min"], is_int),
+                    fmt_num(s["max"], is_int),
                 ]
             )
         print_table(title=None, columns=ext_columns, rows=ext_rows)
@@ -517,15 +508,15 @@ def _display_daily_stats(stats: dict, merged: bool = False) -> None:
         da_rows.append(
             [
                 METRIC_LABELS[key],
-                _fmt_num(s["count"]),
-                _fmt_num(s["nonzero_days"]),
-                _fmt_num(s["mean"], is_int),
-                _fmt_num(s["median"], is_int),
-                _fmt_num(s["std"], is_int),
-                _fmt_num(s["q1"], is_int),
-                _fmt_num(s["q3"], is_int),
-                _fmt_num(s["max"], is_int),
-                _fmt_num(s["min"], is_int),
+                fmt_num(s["count"]),
+                fmt_num(s["nonzero_days"]),
+                fmt_num(s["mean"], is_int),
+                fmt_num(s["median"], is_int),
+                fmt_num(s["std"], is_int),
+                fmt_num(s["q1"], is_int),
+                fmt_num(s["q3"], is_int),
+                fmt_num(s["max"], is_int),
+                fmt_num(s["min"], is_int),
             ]
         )
     print_table(title=None, columns=da_columns, rows=da_rows)
@@ -545,7 +536,7 @@ def _display_daily_stats(stats: dict, merged: bool = False) -> None:
         row = [METRIC_LABELS[key]]
         for t in all_types:
             ms = type_stats[t]["metrics"].get(key, {})
-            row.append(_fmt_num(ms.get("sum", 0), is_int))
+            row.append(fmt_num(ms.get("sum", 0), is_int))
         pt_rows.append(row)
     print_table(title=None, columns=pt_columns, rows=pt_rows)
 
@@ -563,7 +554,7 @@ def _display_daily_stats(stats: dict, merged: bool = False) -> None:
             label = f_title(title) if title else f_meta(short_name)
             item_type = item["type"]
             item_recs = item["records"]
-            val_str = _fmt_num(item["value"], _is_integer_metric(key))
+            val_str = fmt_num(item["value"], _is_integer_metric(key))
             echo(f"    {f_dim(f'{i + 1}.')} {f_num(val_str)}  {label}  {f_meta(f'({item_type}, {item_recs} days)')}")
 
     blank()
@@ -618,15 +609,15 @@ def _display_aggr_stats(stats: dict, synthesized: bool = False, merged: bool = F
         rows.append(
             [
                 METRIC_LABELS[key],
-                _fmt_num(s["count"]),
-                _fmt_num(s["sum"], is_int),
-                _fmt_num(s["mean"], is_int),
-                _fmt_num(s["median"], is_int),
-                _fmt_num(s["std"], is_int),
-                _fmt_num(s["q1"], is_int),
-                _fmt_num(s["q3"], is_int),
-                _fmt_num(s["min"], is_int),
-                _fmt_num(s["max"], is_int),
+                fmt_num(s["count"]),
+                fmt_num(s["sum"], is_int),
+                fmt_num(s["mean"], is_int),
+                fmt_num(s["median"], is_int),
+                fmt_num(s["std"], is_int),
+                fmt_num(s["q1"], is_int),
+                fmt_num(s["q3"], is_int),
+                fmt_num(s["min"], is_int),
+                fmt_num(s["max"], is_int),
             ]
         )
     print_table(title=None, columns=columns, rows=rows)
@@ -643,15 +634,15 @@ def _display_aggr_stats(stats: dict, synthesized: bool = False, merged: bool = F
             ext_rows.append(
                 [
                     EXTRA_METRIC_LABELS.get(key, key),
-                    _fmt_num(s["count"]),
-                    _fmt_num(s["sum"], is_int),
-                    _fmt_num(s["mean"], is_int),
-                    _fmt_num(s["median"], is_int),
-                    _fmt_num(s["std"], is_int),
-                    _fmt_num(s["q1"], is_int),
-                    _fmt_num(s["q3"], is_int),
-                    _fmt_num(s["min"], is_int),
-                    _fmt_num(s["max"], is_int),
+                    fmt_num(s["count"]),
+                    fmt_num(s["sum"], is_int),
+                    fmt_num(s["mean"], is_int),
+                    fmt_num(s["median"], is_int),
+                    fmt_num(s["std"], is_int),
+                    fmt_num(s["q1"], is_int),
+                    fmt_num(s["q3"], is_int),
+                    fmt_num(s["min"], is_int),
+                    fmt_num(s["max"], is_int),
                 ]
             )
         print_table(title=None, columns=ext_columns, rows=ext_rows)
@@ -671,7 +662,7 @@ def _display_aggr_stats(stats: dict, synthesized: bool = False, merged: bool = F
             row = [METRIC_LABELS[key]]
             for t in all_types:
                 ms = type_stats[t]["metrics"].get(key, {})
-                row.append(_fmt_num(ms.get("sum", 0), is_int))
+                row.append(fmt_num(ms.get("sum", 0), is_int))
             pt_rows.append(row)
         print_table(title=None, columns=pt_columns, rows=pt_rows)
 
@@ -690,10 +681,10 @@ def _display_aggr_stats(stats: dict, synthesized: bool = False, merged: bool = F
             yt_rows.append(
                 [
                     METRIC_LABELS[key],
-                    _fmt_num(y.get("sum", 0), is_int),
-                    _fmt_num(y.get("mean", 0), is_int),
-                    _fmt_num(t.get("sum", 0), is_int),
-                    _fmt_num(t.get("mean", 0), is_int),
+                    fmt_num(y.get("sum", 0), is_int),
+                    fmt_num(y.get("mean", 0), is_int),
+                    fmt_num(t.get("sum", 0), is_int),
+                    fmt_num(t.get("mean", 0), is_int),
                 ]
             )
         if yt_rows:
@@ -793,8 +784,7 @@ def compute_and_display_stats(output_json: bool = False, only: str = "both") -> 
 
     for fp in json_files:
         try:
-            with open(fp, encoding="utf-8") as f:
-                data = json.load(f)
+            data = load_json(fp)
         except (json.JSONDecodeError, OSError) as exc:
             if not output_json:
                 warning(f"Failed to read {fp.name}: {exc}")
