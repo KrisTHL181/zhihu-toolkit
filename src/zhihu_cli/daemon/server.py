@@ -44,12 +44,11 @@ from curl_cffi import CurlHttpVersion
 
 from zhihu_cli.content.handlers._session_core import (
     ZhihuSession,
-    _is_captcha_endpoint,
     _resolve_user_agent,
     get_browser,
 )
 from zhihu_cli.content.handlers.cache_manager import cache_manager
-from zhihu_cli.content.handlers.captcha import detect_captcha
+from zhihu_cli.content.handlers.captcha import _is_captcha_endpoint, detect_captcha
 from zhihu_cli.content.utils import rate_limit
 from zhihu_cli.daemon import _platform, transport
 from zhihu_cli.daemon.protocol import (
@@ -125,6 +124,9 @@ class DaemonServer:
         self._fingerprints: dict[str | None, str] = {}
         #: Per-profile captcha mode, applied whenever that session is (re)built.
         self._captcha_modes: dict[str | None, str] = {}
+        #: Per-profile response-challenge handler names to skip, applied
+        #: whenever that session is (re)built.
+        self._disabled_challenges: dict[str | None, frozenset[str]] = {}
         #: Single global lock protecting both registry mutations and the whole
         #: HTTP exchange (preserves the previous serialisation).  It is a plain
         #: ``threading.Lock`` — never re-acquire it.
@@ -246,6 +248,9 @@ class DaemonServer:
         # pinned another mode through SET_CONFIG.  Captcha detection is done
         # manually in _handle_http_request().
         sess.captcha_handler = self._captcha_modes.get(profile, "ignore")
+        # Challenge skips are per profile too, so a later lazy build applies
+        # whatever the client last sent through SET_CONFIG.
+        sess.disabled_challenges = set(self._disabled_challenges.get(profile, ()))
 
         old = self._sessions.get(profile)
         self._sessions[profile] = sess
@@ -514,8 +519,9 @@ class DaemonServer:
         non-reentrant — doing so would deadlock).
 
         ``captcha_handler`` applies to the message's ``profile`` (the
-        per-profile mode is remembered for future builds); the other keys are
-        process-global.
+        per-profile mode is remembered for future builds).  So does
+        ``disabled_challenges``, a list of response-challenge handler names to
+        skip for that profile.  The other keys are process-global.
 
         ``qps`` is the account-wide rate limit: it configures the same
         process-global limiter that :meth:`ZhihuSession.request` calls, so it
@@ -534,6 +540,17 @@ class DaemonServer:
                 return build_pong(msg_id)
             except Exception as e:
                 _log(f"Setting config captcha_handler failed for profile {_profile_label(profile)!r}", exc=True)
+                return build_error(msg_id, type(e).__name__, str(e))
+        elif key == "disabled_challenges":
+            # Validate at the wire boundary: the session property can then
+            # assume a clean collection of strings.
+            if not isinstance(value, (list, tuple)) or not all(isinstance(name, str) for name in value):
+                return build_error(msg_id, "InvalidConfig", f"Invalid disabled_challenges value: {value!r}")
+            try:
+                await loop.run_in_executor(None, self._do_set_disabled_challenges, profile, value)
+                return build_pong(msg_id)
+            except Exception as e:
+                _log(f"Setting config disabled_challenges failed for profile {_profile_label(profile)!r}", exc=True)
                 return build_error(msg_id, type(e).__name__, str(e))
         elif key == "user_agent":
             try:
@@ -571,6 +588,23 @@ class DaemonServer:
             sess = self._sessions.get(profile)
             if sess is not None:
                 sess.captcha_handler = value
+
+    def _do_set_disabled_challenges(self, profile: str | None, value: list[str] | tuple[str, ...]) -> None:
+        """Set the response-challenge skips for *profile* (thread-pool worker).
+
+        The set is remembered even when that profile has no session yet, so a
+        later lazy build applies it.  *value* has already been validated as a
+        list/tuple of strings by :meth:`_handle_set_config`.
+
+        :param profile: Profile name, or ``None`` for the active/legacy key.
+        :param value: Handler names to skip.
+        """
+        names = frozenset(value)
+        with self._session_lock:
+            self._disabled_challenges[profile] = names
+            sess = self._sessions.get(profile)
+            if sess is not None:
+                sess.disabled_challenges = set(names)
 
     async def _handle_http_request(self, msg_id: str, msg: dict[str, Any]) -> dict[str, Any]:
         method = msg.get("method", "GET")

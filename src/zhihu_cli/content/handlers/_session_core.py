@@ -15,25 +15,27 @@ from __future__ import annotations
 import hashlib
 import json
 import re
-import sys
 import threading
 from contextlib import nullcontext
 from http.cookiejar import CookieJar
-from typing import Any
+from typing import TYPE_CHECKING, Any
 from urllib.parse import urlparse
 
 from curl_cffi import CurlHttpVersion
 from curl_cffi import requests as _requests
-from curl_cffi.requests.cookies import Cookies
 from curl_cffi.requests.exceptions import CookieConflict
 from lxml import html as lxml_html
 
 from zhihu_cli.content.handlers import get_user_agent
 from zhihu_cli.content.handlers.cache_manager import cache_manager
-from zhihu_cli.content.handlers.captcha import detect_captcha
-from zhihu_cli.content.handlers.captcha_gate import captcha_gate, resolve_captcha
+from zhihu_cli.content.handlers.captcha_gate import captcha_gate
+from zhihu_cli.content.handlers.challenges import ChallengeContext, run_challenges
+from zhihu_cli.content.handlers.cookie_utils import seed_cookie_jar
 from zhihu_cli.content.utils import rate_limit
 from zhihu_cli.content.utils.zse import ZSE93
+
+if TYPE_CHECKING:
+    from collections.abc import Iterable
 
 
 def get_browser(ua: str) -> _requests.BrowserTypeLiteral:
@@ -89,17 +91,42 @@ class ZhihuSession(_requests.Session):
     via the ZSEv4 block cipher.
 
     Set ``captcha_handler`` to "auto" (interactive), "prompt" (ask first),
-    or "ignore" (skip handling) to control risk-control handling.
+    or "ignore" (skip handling) to control captcha / risk-control handling.
+    Anti-crawl responses are handled by the registry in
+    :mod:`zhihu_cli.content.handlers.challenges`; a handler whose name is in
+    ``disabled_challenges`` is skipped for this session.  Assign a whole new
+    set (``session.disabled_challenges = {"eo_bot"}``) — the getter returns a
+    snapshot, so mutating it does not change the session.
     """
 
     def __init__(self, *args: Any, **kwargs: Any) -> None:
         super().__init__(*args, **kwargs)
         self._zse_cipher = None  # lazy init to avoid import-time side effects
         self.captcha_handler: str = "auto"  # "auto", "prompt", or "ignore"
+        # Names of response-challenge handlers to skip, e.g. {"eo_bot"}.
+        # Configure at setup time; the registry consults it on every response.
+        self._disabled_challenges: set[str] = set()
         # Serialises the pop→request→restore window over the *shared*
         # ``self.headers`` dict for ``skip_app_headers`` requests (see
         # ``request``); only those callers ever take it.
         self._app_headers_lock = threading.Lock()
+
+    @property
+    def disabled_challenges(self) -> set[str]:
+        """Names of response-challenge handlers this session skips.
+
+        Returns a copy so a caller cannot mutate the live set through the
+        snapshot; assign a new set to change it.
+
+        :returns: A new set containing the current handler names.
+        """
+        return set(self._disabled_challenges)
+
+    @disabled_challenges.setter
+    def disabled_challenges(self, names: Iterable[str]) -> None:
+        if isinstance(names, str):
+            raise TypeError("disabled_challenges must be a set/list of handler names, not a string")
+        self._disabled_challenges = {str(name) for name in names}
 
     @property
     def zse_cipher(self):
@@ -171,12 +198,16 @@ class ZhihuSession(_requests.Session):
         :mod:`zhihu_cli.content.handlers.captcha_gate`), so a timed-out thread
         still sends and simply sees the original 403.
 
+        Post-response anti-crawl handling is delegated to the registry in
+        :mod:`zhihu_cli.content.handlers.challenges`: each registered handler
+        may solve the challenge and have the request re-sent once.
+
         :param method: HTTP method.
         :param url: Full request URL.
         :param kwargs: Same keyword arguments as
             :meth:`curl_cffi.requests.Session.request`, plus
             ``skip_app_headers`` (suppress ``x-app-version``/``x-app-za``).
-        :returns: The response, retried once when a captcha was resolved.
+        :returns: The response, retried when a challenge was resolved.
         """
         # Order matters: the captcha gate can park many threads, so waiting
         # there first keeps the rate limiter's slots from being consumed by
@@ -227,74 +258,53 @@ class ZhihuSession(_requests.Session):
 
                 resp = super().request(method, url, **kwargs)
 
-                # Post-response captcha / risk-control handling
-                if self.captcha_handler != "ignore":
-                    captcha_error = detect_captcha(resp)
-                    if captcha_error is not None:
-                        # Avoid re-entrant handling for captcha-related endpoints
-                        parsed = urlparse(url)
-                        path = parsed.path
-                        if not _is_captcha_endpoint(path):
-                            if captcha_error.get("need_login"):
-                                # A login gate is not a captcha: do not open the
-                                # unhuman page or wait for input.  Report it once
-                                # and let fetch_json/fetch_page_html raise a
-                                # ZhihuGateError with the next action.
-                                _print_non_interactive_captcha_warning(captcha_error)
-                                return resp
-                            mode = self.captcha_handler
-                            if mode == "auto":
-                                if not _can_prompt_user():
-                                    # ``handle_captcha`` prompts through ``input()``. With no
-                                    # terminal to read from it would block forever (or die with
-                                    # EOFError), and either way it consumes the 403 so the
-                                    # caller can no longer tell "captcha" from "this item is
-                                    # unavailable". Degrade to the "ignore" behaviour instead:
-                                    # hand the raw 403 back and let the caller decide.
-                                    _print_non_interactive_captcha_warning(captcha_error)
-                                elif captcha_gate.is_resolver():
-                                    # Re-entrant: this request came from the resolver
-                                    # thread's own resolution flow — never prompt twice.
-                                    pass
-                                elif captcha_gate.epoch != epoch_at_send:
-                                    # A resolution completed while our request was in
-                                    # flight, so this 403 was produced before it and is
-                                    # stale.  We never parked at the gate, so the wait
-                                    # branch below cannot see us: without this the
-                                    # thread would become a *second* resolver and prompt
-                                    # the user for a challenge that was just answered.
-                                    # Re-send once through ``super().request`` (bypassing
-                                    # this block) so a second captcha cannot recurse.
-                                    resp = super().request(method, url, **kwargs)
-                                elif captcha_gate.try_begin():
-                                    try:
-                                        result = resolve_captcha(self, captcha_error)
-                                    finally:
-                                        captcha_gate.finish()
-                                    if result == "resolved":
-                                        # Retry the original request once after
-                                        # verification.  ``super().request`` on purpose:
-                                        # the retry must bypass this block rather than
-                                        # recurse into it.  For "skipped"/"cancelled"
-                                        # the original 403 is returned as-is.
-                                        resp = super().request(method, url, **kwargs)
-                                elif captcha_gate.acquire():
-                                    # Another thread resolved the captcha while we waited
-                                    # at the gate: our own in-flight request is already a
-                                    # stale 403, so re-send it exactly once.
-                                    resp = super().request(method, url, **kwargs)
-                                # On gate timeout, fall through and return the original
-                                # 403 so the caller can decide what to do.
-                            elif mode == "prompt":
-                                _print_captcha_warning(captcha_error)
-
-                return resp
+                # Every registered challenge gets one look at the response.
+                # ``retry`` re-sends with ``_raw_request`` so challenge
+                # handling is bypassed and cannot recurse.  Running inside the
+                # ``try`` keeps retries under the same app-header restore.
+                ctx = ChallengeContext(
+                    session=self,
+                    method=method,
+                    url=url,
+                    kwargs=kwargs,
+                    epoch_at_send=epoch_at_send,
+                    retry=self._retry_challenge,
+                )
+                return run_challenges(resp, ctx, skip=self._disabled_challenges)
             finally:
                 if skip_app:
                     if saved_version is not None:
                         self.headers["x-app-version"] = saved_version
                     if saved_za is not None:
                         self.headers["x-app-za"] = saved_za
+
+    def _retry_challenge(self, ctx: ChallengeContext) -> Any:
+        """Re-send a request after a challenge was solved.
+
+        Reads the gate epoch immediately before the re-send, exactly like the
+        original pre-send read; a stale value would make a genuine post-retry
+        403 look like a pre-resolution one.
+
+        :param ctx: Context of the challenged request; ``epoch_at_send`` is
+            refreshed in place.
+        :returns: The raw response, with no challenge handling applied.
+        """
+        ctx.epoch_at_send = captcha_gate.epoch
+        return self._raw_request(ctx.method, ctx.url, ctx.kwargs)
+
+    def _raw_request(self, method, url, kwargs):
+        """Send a request directly, bypassing all challenge handling.
+
+        Used as :attr:`ChallengeContext.retry`, so a solved challenge can
+        re-send the original request exactly once without the registry (or this
+        method) recursing.
+
+        :param method: HTTP method.
+        :param url: Full request URL.
+        :param kwargs: Keyword arguments of the original request.
+        :returns: The raw response.
+        """
+        return super().request(method, url, **kwargs)
 
 
 def _resolve_user_agent(headers: dict[str, str]) -> str:
@@ -303,35 +313,6 @@ def _resolve_user_agent(headers: dict[str, str]) -> str:
     if configured:
         return configured
     return headers.get("User-Agent", "")
-
-
-def _seed_cookie_jar(jar: CookieJar, cookie_header: str) -> None:
-    """Seed *jar* from a profile's ``Cookie`` header.
-
-    Necessary because libcurl replaces an explicit ``Cookie`` header with the
-    jar's contents as soon as the jar is non-empty — an unseeded jar would drop
-    the profile's authentication cookies.  Names already present are left
-    untouched so values updated by the server (e.g. a refreshed ``d_c0`` after
-    a CAPTCHA) win over the stale header.
-
-    :param jar: The session's cookie jar.
-    :param cookie_header: Raw ``Cookie`` header value, ``name=value; ...``.
-    """
-    if not cookie_header:
-        return
-    # ``Cookies(jar)`` keeps the very same jar object (``else: self.jar =
-    # cookies``), so ``set`` below mutates the jar the session uses.
-    cookies = Cookies(jar)
-    existing = {cookie.name for cookie in jar}
-    for part in cookie_header.split("; "):
-        name, sep, value = part.partition("=")
-        if not sep or not name or name in existing:
-            continue
-        try:
-            cookies.set(name, value, domain=".zhihu.com", path="/")
-        except Exception:
-            continue
-        existing.add(name)
 
 
 def _build_direct_session(
@@ -371,7 +352,7 @@ def _build_direct_session(
     if ua:
         sess.headers["User-Agent"] = ua
     if cookies is not None:
-        _seed_cookie_jar(cookies, hdrs.get("Cookie", ""))
+        seed_cookie_jar(cookies, hdrs.get("Cookie", ""))
     return sess
 
 
@@ -391,96 +372,3 @@ def get_page_state(html_text: str, key: str = "entities") -> dict[str, Any]:
 
     initial_data = json.loads(script_tag.text)
     return initial_data["initialState"][key]
-
-
-# ── captcha helpers ────────────────────────────────────────────────────────
-
-
-def _is_captcha_endpoint(path: str) -> bool:
-    """Return True if the path belongs to a captcha-related endpoint.
-
-    These endpoints should NOT trigger captcha handling themselves,
-    to avoid infinite recursion.
-    """
-    captcha_paths = (
-        "/api/v4/anticrawl/new_captcha_appeal",
-        "/antispam/",
-        "/account/unhuman",
-        "/account/risk_control",
-        "/api/v3/oauth/captcha",
-    )
-    return path.startswith(captcha_paths)
-
-
-def _print_captcha_warning(captcha_error: dict) -> None:
-    """Print a brief warning that a captcha or login gate was triggered."""
-    redirect = captcha_error.get("redirect", "")
-    print(file=sys.stderr)
-    if captcha_error.get("need_login"):
-        print("  ⚠️  Zhihu requires an authenticated session for this request.", file=sys.stderr)
-        if redirect:
-            print(f"  Sign in at: {redirect}", file=sys.stderr)
-        print("  Run 'zhihu auth login' or 'zhihu auth import', or switch profiles.", file=sys.stderr)
-    else:
-        print(f"  ⚠️  Zhihu risk control triggered ({captcha_error.get('message', 'unknown')[:60]}...)", file=sys.stderr)
-        if redirect:
-            print(f"  Verify at: {redirect}", file=sys.stderr)
-        print("  Run 'zhihu auth captcha' to resolve, or switch to a different profile.", file=sys.stderr)
-    print(file=sys.stderr)
-
-
-def _can_prompt_user() -> bool:
-    """Whether an interactive captcha prompt could actually reach a user.
-
-    Both a readable stdin and a visible stderr are required: ``handle_captcha``
-    reads a choice from stdin and prints instructions to stderr. Under cron,
-    ``nohup``, or a redirected pipeline neither is a terminal, and prompting
-    would block forever instead of telling anyone anything.
-    """
-    try:
-        return sys.stdin.isatty() and sys.stderr.isatty()
-    except Exception:  # noqa: BLE001
-        return False
-
-
-_non_interactive_captcha_warned = False
-_non_interactive_captcha_lock = threading.Lock()
-
-
-def _print_non_interactive_captcha_warning(captcha_error: dict) -> None:
-    """Warn that a captcha or login gate went unhandled because nothing can prompt.
-
-    Printed at most once per process — a challenge window lasts many requests
-    and repeating this on every one of them would bury the rest of the output.
-    The flag is claimed under a lock (several worker threads can hit a gate at
-    the same instant); the message itself is printed outside it, so threads
-    never contend on I/O.
-    """
-    global _non_interactive_captcha_warned
-    with _non_interactive_captcha_lock:
-        if _non_interactive_captcha_warned:
-            return
-        _non_interactive_captcha_warned = True
-
-    redirect = captcha_error.get("redirect", "")
-    print(file=sys.stderr)
-    if captcha_error.get("need_login"):
-        print(
-            "  ⚠️  Zhihu requires an authenticated session for this request.\n"
-            "      Leaving the 403 for the caller to report.",
-            file=sys.stderr,
-        )
-        if redirect:
-            print(f"  Sign in at: {redirect}", file=sys.stderr)
-        print("  Run 'zhihu auth login' or 'zhihu auth import', or switch profiles.", file=sys.stderr)
-    else:
-        print(
-            "  ⚠️  Zhihu risk control triggered, but this process has no terminal to "
-            "prompt on.\n"
-            "      Leaving the 403 unhandled so the caller can stop and report it.",
-            file=sys.stderr,
-        )
-        if redirect:
-            print(f"  Verify at: {redirect}", file=sys.stderr)
-        print("  Run 'zhihu auth captcha' to resolve, or switch to a different profile.", file=sys.stderr)
-    print(file=sys.stderr)

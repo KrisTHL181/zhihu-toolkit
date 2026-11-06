@@ -54,8 +54,8 @@ _LAZY_EXPORTS: dict[str, str] = {
     "CurlHttpVersion": "_session_core",
     "_resolve_user_agent": "_session_core",
     "_build_direct_session": "_session_core",
-    "_is_captcha_endpoint": "_session_core",
-    "_print_captcha_warning": "_session_core",
+    "_is_captcha_endpoint": "captcha",
+    "_print_captcha_warning": "captcha",
 }
 
 # ── module-level __getattr__ ───────────────────────────────────────────────
@@ -802,6 +802,9 @@ def reload_session() -> None:
 
             _session._send_reload()
             _session._send_config("captcha_handler", _session.captcha_handler)
+            # Same reason as captcha_handler: after a profile switch the
+            # daemon's session must carry this client's challenge skips too.
+            _session._send_config("disabled_challenges", sorted(_session.disabled_challenges))
             # Re-push the persisted rate limit: ``config qps set`` already does
             # so, but a reload is the natural point to re-sync a daemon that
             # was restarted or missed the earlier message.

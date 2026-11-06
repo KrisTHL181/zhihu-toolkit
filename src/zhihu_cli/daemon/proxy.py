@@ -3,7 +3,8 @@
 :class:`DaemonProxySession` is a drop-in replacement for
 :class:`~zhihu_cli.content.handlers.requests.ZhihuSession`.  It has the
 same ``get`` / ``post`` / ``put`` / ``delete`` / ``request`` API, plus
-``headers``, ``cookies``, and ``captcha_handler`` attributes.
+``headers``, ``cookies``, ``captcha_handler``, and ``disabled_challenges``
+attributes.
 
 The transport is whatever the daemon published in its state file: a Unix
 domain socket on POSIX, or loopback TCP with a token handshake on Windows.
@@ -32,7 +33,7 @@ import json
 import socket
 import sys
 import threading
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from zhihu_cli.content.handlers.captcha_gate import captcha_gate, resolve_captcha
 from zhihu_cli.content.utils import rate_limit
@@ -55,6 +56,9 @@ from zhihu_cli.daemon.protocol import (
     recv_message,
     send_message,
 )
+
+if TYPE_CHECKING:
+    from collections.abc import Iterable
 
 CONNECT_TIMEOUT = 2.0
 RW_TIMEOUT = 60.0
@@ -291,6 +295,11 @@ class DaemonProxySession:
     processes using different profiles never share credentials even though they
     talk to the same daemon.
 
+    Two per-profile attributes configure anti-crawl handling and are forwarded
+    to the daemon: ``captcha_handler`` (the captcha mode) and
+    ``disabled_challenges`` (response-challenge handler names to skip).  Assign
+    a whole new set to ``disabled_challenges``; the getter returns a snapshot.
+
     Usage::
 
         proxy = DaemonProxySession(profile="alt")
@@ -304,6 +313,7 @@ class DaemonProxySession:
         #: (legacy behavior for callers that do not pin one).
         self.profile = profile
         self._captcha_handler: str = "auto"
+        self._disabled_challenges: set[str] = set()
         self.headers: dict[str, str] = {}
         self.cookies: _CookieProxy = _CookieProxy(self)
         self._sock: socket.socket | None = None
@@ -495,6 +505,31 @@ class DaemonProxySession:
         direct = self._direct
         if direct is not None:
             direct.captcha_handler = value
+
+    # ── disabled_challenges property ───────────────────────────────────
+
+    @property
+    def disabled_challenges(self) -> set[str]:
+        """Response-challenge handlers this session skips.
+
+        Returns a copy so mutating the snapshot cannot silently do nothing;
+        assign a new set to change it (the daemon is told to match).
+
+        :returns: A new set containing the current handler names.
+        """
+        return set(self._disabled_challenges)
+
+    @disabled_challenges.setter
+    def disabled_challenges(self, names: Iterable[str]) -> None:
+        if isinstance(names, str):
+            raise TypeError("disabled_challenges must be a set/list of handler names, not a string")
+        values = {str(name) for name in names}
+        self._disabled_challenges = values
+        self._send_config("disabled_challenges", sorted(values))
+        # Keep the direct fallback (when one already exists) in sync.
+        direct = self._direct
+        if direct is not None:
+            direct.disabled_challenges = set(values)
 
     # ── HTTP verb shortcuts ────────────────────────────────────────────
 
@@ -696,6 +731,7 @@ class DaemonProxySession:
                 direct = _build_context_session(self.profile)
                 direct.headers.update(self.headers)
                 direct.captcha_handler = self._captcha_handler
+                direct.disabled_challenges = set(self._disabled_challenges)
                 self._direct = direct
             return self._direct
 
@@ -838,13 +874,13 @@ class DaemonProxySession:
             # A login gate is not a captcha: never open the unhuman page or
             # wait for input.  Report it once and let the caller's gate
             # detection produce the actionable error.
-            from zhihu_cli.content.handlers._session_core import _print_non_interactive_captcha_warning
+            from zhihu_cli.content.handlers.captcha import _print_non_interactive_captcha_warning
 
             _print_non_interactive_captcha_warning(captcha_error)
             return _synthetic_403(captcha_error, url)
 
         if self._captcha_handler == "prompt":
-            from zhihu_cli.content.handlers._session_core import _print_captcha_warning
+            from zhihu_cli.content.handlers.captcha import _print_captcha_warning
 
             _print_captcha_warning(captcha_error)
             return _synthetic_403(captcha_error, url)
@@ -852,7 +888,7 @@ class DaemonProxySession:
         # "auto" mode: interactive resolution.  ``_can_prompt_user`` is the
         # same guard the direct path uses — without a terminal, prompting
         # would block forever, so degrade to returning the 403.
-        from zhihu_cli.content.handlers._session_core import (
+        from zhihu_cli.content.handlers.captcha import (
             _can_prompt_user,
             _print_non_interactive_captcha_warning,
         )

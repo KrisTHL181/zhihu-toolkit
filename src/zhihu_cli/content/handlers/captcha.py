@@ -13,6 +13,8 @@ This module provides:
 from __future__ import annotations
 
 import json
+import sys
+import threading
 import webbrowser
 from typing import Any
 from urllib.parse import parse_qs, urlparse
@@ -215,3 +217,96 @@ def _print_captcha_banner(
     print("  return here and press Enter to continue.")
     print(border)
     print()
+
+
+# ── shared helpers ─────────────────────────────────────────────────────────
+
+
+def _is_captcha_endpoint(path: str) -> bool:
+    """Return True if the path belongs to a captcha-related endpoint.
+
+    These endpoints should NOT trigger captcha handling themselves,
+    to avoid infinite recursion.
+    """
+    captcha_paths = (
+        "/api/v4/anticrawl/new_captcha_appeal",
+        "/antispam/",
+        "/account/unhuman",
+        "/account/risk_control",
+        "/api/v3/oauth/captcha",
+    )
+    return path.startswith(captcha_paths)
+
+
+def _print_captcha_warning(captcha_error: dict) -> None:
+    """Print a brief warning that a captcha or login gate was triggered."""
+    redirect = captcha_error.get("redirect", "")
+    print(file=sys.stderr)
+    if captcha_error.get("need_login"):
+        print("  ⚠️  Zhihu requires an authenticated session for this request.", file=sys.stderr)
+        if redirect:
+            print(f"  Sign in at: {redirect}", file=sys.stderr)
+        print("  Run 'zhihu auth login' or 'zhihu auth import', or switch profiles.", file=sys.stderr)
+    else:
+        print(f"  ⚠️  Zhihu risk control triggered ({captcha_error.get('message', 'unknown')[:60]}...)", file=sys.stderr)
+        if redirect:
+            print(f"  Verify at: {redirect}", file=sys.stderr)
+        print("  Run 'zhihu auth captcha' to resolve, or switch to a different profile.", file=sys.stderr)
+    print(file=sys.stderr)
+
+
+def _can_prompt_user() -> bool:
+    """Whether an interactive captcha prompt could actually reach a user.
+
+    Both a readable stdin and a visible stderr are required: ``handle_captcha``
+    reads a choice from stdin and prints instructions to stderr. Under cron,
+    ``nohup``, or a redirected pipeline neither is a terminal, and prompting
+    would block forever instead of telling anyone anything.
+    """
+    try:
+        return sys.stdin.isatty() and sys.stderr.isatty()
+    except Exception:  # noqa: BLE001
+        return False
+
+
+_non_interactive_captcha_warned = False
+_non_interactive_captcha_lock = threading.Lock()
+
+
+def _print_non_interactive_captcha_warning(captcha_error: dict) -> None:
+    """Warn that a captcha or login gate went unhandled because nothing can prompt.
+
+    Printed at most once per process — a challenge window lasts many requests
+    and repeating this on every one of them would bury the rest of the output.
+    The flag is claimed under a lock (several worker threads can hit a gate at
+    the same instant); the message itself is printed outside it, so threads
+    never contend on I/O.
+    """
+    global _non_interactive_captcha_warned
+    with _non_interactive_captcha_lock:
+        if _non_interactive_captcha_warned:
+            return
+        _non_interactive_captcha_warned = True
+
+    redirect = captcha_error.get("redirect", "")
+    print(file=sys.stderr)
+    if captcha_error.get("need_login"):
+        print(
+            "  ⚠️  Zhihu requires an authenticated session for this request.\n"
+            "      Leaving the 403 for the caller to report.",
+            file=sys.stderr,
+        )
+        if redirect:
+            print(f"  Sign in at: {redirect}", file=sys.stderr)
+        print("  Run 'zhihu auth login' or 'zhihu auth import', or switch profiles.", file=sys.stderr)
+    else:
+        print(
+            "  ⚠️  Zhihu risk control triggered, but this process has no terminal to "
+            "prompt on.\n"
+            "      Leaving the 403 unhandled so the caller can stop and report it.",
+            file=sys.stderr,
+        )
+        if redirect:
+            print(f"  Verify at: {redirect}", file=sys.stderr)
+        print("  Run 'zhihu auth captcha' to resolve, or switch to a different profile.", file=sys.stderr)
+    print(file=sys.stderr)
