@@ -137,6 +137,15 @@ class _StreamResponse:
         """Delegate to the real curl_cffi response's :meth:`iter_lines`."""
         return self._resp.iter_lines(decode_unicode=decode_unicode)
 
+    def iter_content(self, chunk_size: int | None = None) -> Any:
+        """Delegate to the real curl_cffi response's :meth:`iter_content`."""
+        return self._resp.iter_content(chunk_size=chunk_size)
+
+    @property
+    def encoding(self) -> str | None:
+        """Encoding curl_cffi would use to decode the body as text."""
+        return getattr(self._resp, "encoding", None)
+
     def raise_for_status(self) -> None:
         """Delegate to the wrapped response's own :meth:`raise_for_status`.
 

@@ -115,6 +115,7 @@ def send_request(
     method: str = "GET",
     headers: dict[str, str] | None = None,
     data: str | None = None,
+    stream: bool = False,
 ) -> Any:
     """Send an HTTP request through the global :class:`ZhihuSession`.
 
@@ -127,8 +128,13 @@ def send_request(
     :param headers: Extra headers to merge with session defaults.
     :param data: Request body — sent as ``json`` if parseable as JSON,
         otherwise sent as raw ``data``.
+    :param stream: Return the body as an iterator instead of buffering it.
+        The caller must consume ``iter_content()`` and call ``close()``.
+        Streaming requests bypass the daemon (its protocol cannot relay
+        chunks) and are served by a temporary direct session.
     :returns: A response object with ``status_code``, ``headers``,
-        ``text``, and ``content`` attributes.
+        ``text``, and ``content`` attributes; with *stream* the body is only
+        available through ``iter_content()``.
     """
     from zhihu_cli.content.handlers.requests import session
 
@@ -140,5 +146,7 @@ def send_request(
             kwargs["json"] = json_mod.loads(data)
         except (json_mod.JSONDecodeError, TypeError, ValueError):
             kwargs["data"] = data.encode("utf-8")
+    if stream:
+        kwargs["stream"] = True
 
     return session.request(method, url, **kwargs)

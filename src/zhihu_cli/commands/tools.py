@@ -2,14 +2,20 @@
 
 from __future__ import annotations
 
+import codecs
 import json
 import re
 import subprocess
 import sys
 import time
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 import click
+
+if TYPE_CHECKING:
+    from collections.abc import Iterator
+    from typing import Any
 
 from zhihu_cli.content.handlers import get_data_dir
 from zhihu_cli.content.handlers.cache_manager import cache_manager
@@ -26,6 +32,58 @@ from zhihu_cli.output import (
     success,
     warning,
 )
+
+#: How many leading bytes to inspect before printing a streamed body.
+#: NUL in this window is the same binary heuristic git and grep use; a
+#: payload that passes it is treated as text and streamed through.
+_BINARY_PEEK_BYTES = 8192
+
+
+def _peek_body(resp: Any, limit: int = _BINARY_PEEK_BYTES) -> tuple[bytes, Iterator[bytes]]:
+    """Buffer the first *limit* bytes of a streaming response.
+
+    Reading stops as soon as the buffer reaches *limit* (one chunk may push
+    it slightly over), leaving the rest of the body unread.  Callers abort a
+    binary payload at this point, so only a few KiB are ever downloaded.
+
+    :param resp: A streaming response exposing ``iter_content()``.
+    :param limit: Number of leading bytes to buffer.
+    :returns: ``(head, chunks)`` — the buffered prefix and the iterator that
+        yields the remainder of the body.
+    """
+    chunks = resp.iter_content()
+    head = bytearray()
+    for chunk in chunks:
+        if not chunk:
+            continue
+        head += chunk
+        if len(head) >= limit:
+            break
+    return bytes(head), chunks
+
+
+def _stream_text(resp: Any, head: bytes, chunks: Iterator[bytes]) -> None:
+    """Print a streamed body as text, reusing bytes already read into *head*.
+
+    Decoding is incremental so a multi-byte character split across a chunk
+    boundary is not mangled; ``errors="replace"`` matches how
+    :attr:`curl_cffi.requests.Response.text` decodes.
+
+    :param resp: The streaming response (only ``encoding`` is read).
+    :param head: Leading bytes already consumed by :func:`_peek_body`.
+    :param chunks: Iterator over the remaining body bytes.
+    """
+    encoding = getattr(resp, "encoding", None) or "utf-8"
+    try:
+        decoder = codecs.getincrementaldecoder(encoding)(errors="replace")
+    except LookupError:
+        decoder = codecs.getincrementaldecoder("utf-8")(errors="replace")
+
+    click.echo(decoder.decode(head), nl=False)
+    for chunk in chunks:
+        click.echo(decoder.decode(chunk), nl=False)
+    click.echo(decoder.decode(b"", final=True), nl=False)
+    click.echo()  # echo() used to append this newline to the whole body
 
 
 def register_tools(main_group):
@@ -162,7 +220,7 @@ def register_tools(main_group):
         "output_file",
         default=None,
         type=click.Path(),
-        help="Write response body to file instead of stdout",
+        help="Write the raw response body to file instead of stdout",
     )
     def tools_request(
         url: str,
@@ -180,6 +238,11 @@ def register_tools(main_group):
         active profile's auth cookies and User-Agent are included.
 
         Use --curl to see exactly what would be sent, without sending it.
+
+        When the body is printed to a terminal, only the first 8 KiB are
+        inspected for a NUL byte (the git/grep binary heuristic); a binary
+        payload is aborted at that point and nothing is printed.  Use
+        --output to save the raw body bytes instead.
 
         \b
         Examples:
@@ -211,35 +274,58 @@ def register_tools(main_group):
             return
 
         # ── send request ─────────────────────────────────────────────────
-        resp = send_request(url, method=method, headers=parsed_headers if parsed_headers else None, data=data)
+        # Stream when the body is headed for the terminal, so a binary
+        # payload can be rejected after the first 8 KiB instead of being
+        # downloaded in full.  File and pipe outputs have nothing to guard.
+        stream_to_tty = sys.stdout.isatty() and output_file is None
+        resp = send_request(
+            url,
+            method=method,
+            headers=parsed_headers if parsed_headers else None,
+            data=data,
+            stream=stream_to_tty,
+        )
 
         # ── output ───────────────────────────────────────────────────────
-        body = resp.text
+        if stream_to_tty:
+            head, chunks = _peek_body(resp)
+            if b"\0" in head:
+                resp.close()
+                error("Warning: Binary output can mess up your terminal. Use '--output <FILE>' to save to a file.")
+                raise click.exceptions.Exit(1)
+
+            try:
+                if include_headers:
+                    echo(f"HTTP/1.1 {resp.status_code} {getattr(resp, 'reason', '')}")
+                    for k, v in resp.headers.items():
+                        echo(f"{k}: {v}")
+                    echo("")
+                _stream_text(resp, head, chunks)
+            finally:
+                resp.close()
+            return
 
         if output_file:
             out_path = Path(output_file)
             out_path.parent.mkdir(parents=True, exist_ok=True)
-            if include_headers:
-                lines = [f"HTTP/1.1 {resp.status_code} {getattr(resp, 'reason', '')}"]
-                for k, v in resp.headers.items():
-                    lines.append(f"{k}: {v}")
-                lines.append("")
-                lines.append(body)
-                out_path.write_text("\n".join(lines), encoding="utf-8")
-            else:
-                out_path.write_text(body, encoding="utf-8")
+            # Write the raw bytes: text-decoding here would replace every
+            # non-UTF-8 byte with U+FFFD, which is exactly the binary payload
+            # the warning tells the user to save with this flag.
+            with open(out_path, "wb") as fh:
+                if include_headers:
+                    lines = [f"HTTP/1.1 {resp.status_code} {getattr(resp, 'reason', '')}"]
+                    lines.extend(f"{k}: {v}" for k, v in resp.headers.items())
+                    fh.write(("\n".join(lines) + "\n\n").encode("utf-8"))
+                fh.write(resp.content)
             success(f"Saved {f_num(resp.status_code)} → {f_path(str(out_path))}")
         elif include_headers:
             echo(f"HTTP/1.1 {resp.status_code} {getattr(resp, 'reason', '')}")
             for k, v in resp.headers.items():
                 echo(f"{k}: {v}")
             echo("")
-            echo(body)
+            echo(resp.text)
         else:
-            if sys.stdout.isatty() and b"\0" in resp.content:
-                error("Warning: Binary output can mess up your terminal. Use '--output <FILE>' to save to a file.")
-                return
-            echo(body)
+            echo(resp.text)
 
     @tools.group("creator")
     def tools_creator() -> None:
