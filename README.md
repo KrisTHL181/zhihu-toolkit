@@ -59,7 +59,7 @@ Browse Zhihu's feeds, hot lists, questions, articles, pins, and comments — all
 
 ### 💾 Download for Offline
 
-Save any Zhihu content (articles, answers, questions, pins, videos) as clean Markdown with YAML frontmatter. Download individual pieces or batch-process from a manifest. Everything lands in `~/.zhihu-cli/downloads/`, organized by type, ready for your note-taking system or offline reading. Re-running a download is incremental by default: items whose file already exists and whose listing timestamp has not advanced are skipped, with state kept in `.zhihu-download.json` in the output directory. Use `--force` to re-download everything, `--since YYYY-MM-DD` to bound the listing walk for `download user`, and `-j/--concurrency` (default 4) to fetch items in parallel.
+Save any Zhihu content (articles, answers, questions, pins, videos, collections) as clean Markdown with YAML frontmatter. Download individual pieces or batch-process from a manifest. Everything lands in `~/.zhihu-cli/downloads/`, organized by type, ready for your note-taking system or offline reading. Re-running a download is incremental by default: items whose file already exists and whose listing timestamp has not advanced are skipped, with state kept in `.zhihu-download.json` in the output directory. Use `--force` to re-download everything, `--since YYYY-MM-DD` to bound the listing walk for `download user`, and `-j/--concurrency` (default 4) to fetch items in parallel.
 
 ### 🔍 Search
 

@@ -19,8 +19,9 @@ from zhihu_cli.content.download_contents import (
     save_pin,
 )
 from zhihu_cli.content.download_state import DownloadState, delete_stale_file
-from zhihu_cli.content.handlers import get_data_dir
+from zhihu_cli.content.handlers import get_data_dir, get_type_and_id
 from zhihu_cli.content.handlers.article import scrape_article
+from zhihu_cli.content.handlers.collection import get_collection_meta, list_collection_contents
 from zhihu_cli.content.handlers.people import (
     fetch_member_answers,
     fetch_member_articles,
@@ -110,6 +111,253 @@ def _run_items(
         raise
     else:
         executor.shutdown(wait=True)
+
+
+#: Manifest kinds handled by :func:`download_user` and :func:`download_collection`.
+_ITEM_TASK_KINDS = ("answers", "articles", "pins")
+
+#: Collection items use singular ``type`` values; the manifest uses plurals.
+_COLLECTION_TYPE_TO_KIND = {"answer": "answers", "article": "articles", "pin": "pins"}
+
+
+def _answer_item_task(
+    index: int,
+    total: int,
+    item: dict,
+    output_dir: str,
+    with_media: bool,
+    *,
+    url: str | None = None,
+    item_id: str | None = None,
+) -> dict:
+    """Scrape one answer, save it as Markdown, and return a worker outcome.
+
+    :param index: 1-based position in the current batch, for progress output.
+    :param total: Size of the batch, for ``[i/n]`` progress output.
+    :param item: Listing item; its ``updated_time`` is carried into the outcome.
+    :param output_dir: Directory the Markdown file is written to.
+    :param with_media: Download referenced images/videos alongside the file.
+    :param url: Canonical source URL; defaults to ``item["url"]``.
+    :param item_id: Item ID to record; defaults to ``item["id"]``.
+    :returns: ``{"status": "ok", ...}`` on success, ``{"status": "error", ...}``
+        on failure.
+    """
+    source_url = url if url is not None else item.get("url", "")
+    answer_id = item_id if item_id is not None else str(item.get("id", ""))
+    try:
+        meta, md = scrape_answer_page(source_url)
+        save_meta = {
+            "title": meta.get("title", "untitled"),
+            "author": meta.get("author", "unknown"),
+            "created": meta.get("created", "unknown"),
+        }
+        filepath = save_article(source_url, save_meta, md, output_dir, with_media=with_media)
+        with _output_lock:
+            echo(f"  {item_index(index, total)} {save_meta['title'][:50]} -> {f_path(os.path.basename(filepath))}")
+        return {
+            "status": "ok",
+            "kind": "answers",
+            "id": answer_id,
+            "url": source_url,
+            "updated_time": item.get("updated_time"),
+            "filepath": filepath,
+        }
+    except Exception as e:
+        with _output_lock:
+            error(f"  {item_index(index, total)} Error: {e}")
+        return {"status": "error", "kind": "answers", "url": source_url, "error": str(e)}
+
+
+def _article_item_task(
+    index: int,
+    total: int,
+    item: dict,
+    output_dir: str,
+    with_media: bool,
+    *,
+    url: str | None = None,
+    item_id: str | None = None,
+) -> dict:
+    """Scrape one article, save it as Markdown, and return a worker outcome.
+
+    :param index: 1-based position in the current batch, for progress output.
+    :param total: Size of the batch, for ``[i/n]`` progress output.
+    :param item: Listing item; its ``updated_time`` is carried into the outcome.
+    :param output_dir: Directory the Markdown file is written to.
+    :param with_media: Download referenced images/videos alongside the file.
+    :param url: Canonical source URL; defaults to ``item["url"]``.
+    :param item_id: Item ID to record; defaults to ``item["id"]``.
+    :returns: ``{"status": "ok", ...}`` on success, ``{"status": "error", ...}``
+        on failure.
+    """
+    source_url = url if url is not None else item.get("url", "")
+    article_id = item_id if item_id is not None else str(item.get("id", ""))
+    try:
+        meta, md = scrape_article(source_url)
+        author = meta.get("author", {})
+        author_name = author.get("name", "unknown") if isinstance(author, dict) else str(author)
+        save_meta = {
+            "title": meta.get("title", "untitled"),
+            "author": author_name,
+            "created": (meta.get("created_time", "unknown") or "unknown")[:10],
+        }
+        filepath = save_article(source_url, save_meta, md, output_dir, with_media=with_media)
+        with _output_lock:
+            echo(f"  {item_index(index, total)} {save_meta['title'][:50]} -> {f_path(os.path.basename(filepath))}")
+        return {
+            "status": "ok",
+            "kind": "articles",
+            "id": article_id,
+            "url": source_url,
+            "updated_time": item.get("updated_time"),
+            "filepath": filepath,
+        }
+    except Exception as e:
+        with _output_lock:
+            error(f"  {item_index(index, total)} Error: {e}")
+        return {"status": "error", "kind": "articles", "url": source_url, "error": str(e)}
+
+
+def _pin_item_task(
+    index: int,
+    total: int,
+    item: dict,
+    output_dir: str,
+    with_media: bool,
+    *,
+    url: str | None = None,
+    item_id: str | None = None,
+) -> dict:
+    """Scrape one pin, save it as Markdown, and return a worker outcome.
+
+    :param index: 1-based position in the current batch, for progress output.
+    :param total: Size of the batch, for ``[i/n]`` progress output.
+    :param item: Listing item; its ``updated_time`` is carried into the outcome.
+    :param output_dir: Directory the Markdown file is written to.
+    :param with_media: Download referenced images/videos alongside the file.
+    :param url: Canonical source URL; defaults to ``item["url"]``.
+    :param item_id: Item ID to record; defaults to ``item["id"]``.
+    :returns: ``{"status": "ok", ...}`` on success, ``{"status": "error", ...}``
+        on failure.
+    """
+    source_url = url if url is not None else item.get("url", "")
+    pin_id = item_id if item_id is not None else str(item.get("id", ""))
+    try:
+        meta, md = scrape_pin(source_url)
+        author = meta.get("author", {})
+        author_name = author.get("name", "unknown") if isinstance(author, dict) else str(author)
+        save_meta = {
+            "author": author_name,
+            "created": (meta.get("created_time", "unknown") or "unknown")[:10],
+            "pin_id": str(meta.get("id", "")),
+        }
+        filepath = save_pin(source_url, save_meta, md, output_dir, with_media=with_media)
+        preview = (meta.get("excerpt", "") or "")[:30]
+        with _output_lock:
+            echo(f"  {item_index(index, total)} {preview} -> {f_path(os.path.basename(filepath))}")
+        return {
+            "status": "ok",
+            "kind": "pins",
+            "id": pin_id,
+            "url": source_url,
+            "updated_time": item.get("updated_time"),
+            "filepath": filepath,
+        }
+    except Exception as e:
+        with _output_lock:
+            error(f"  {item_index(index, total)} Error: {e}")
+        return {"status": "error", "kind": "pins", "url": source_url, "error": str(e)}
+
+
+#: Manifest kind → per-item worker shared by the user and collection commands.
+_ITEM_TASK_HELPERS = {
+    "answers": _answer_item_task,
+    "articles": _article_item_task,
+    "pins": _pin_item_task,
+}
+
+
+def _pending_items(items: list[dict], kind: str, state: DownloadState, force: bool) -> list[dict]:
+    """Return the listing items that still need downloading.
+
+    :param items: Listing items for *kind*.
+    :param kind: Manifest kind (``"answers"``, ``"articles"``, or ``"pins"``).
+    :param state: Loaded incremental-download manifest.
+    :param force: When true every item is pending.
+    :returns: The pending subset, in listing order.
+    """
+    if force:
+        return list(items)
+    return [item for item in items if not state.is_fresh(kind, str(item.get("id", "")), item.get("updated_time"))]
+
+
+def _parse_collection_id(ref: str) -> str:
+    """Resolve a collection URL or bare numeric ID to its numeric ID.
+
+    :param ref: A ``https://www.zhihu.com/collection/<id>`` URL or a bare
+        numeric collection ID.
+    :returns: The numeric collection ID.
+    :raises click.BadParameter: When *ref* is neither shape.
+    """
+    item_type, item_id = get_type_and_id(ref)
+    if item_type == "collections" and item_id:
+        return item_id
+    candidate = ref.strip()
+    if candidate.isdigit():
+        return candidate
+    raise click.BadParameter("expected a collection URL or numeric collection ID")
+
+
+def _collection_kind(item_type: str) -> str | None:
+    """Map a collection item's singular ``type`` to its manifest kind.
+
+    :param item_type: ``"answer"``, ``"article"``, ``"pin"``, or an unsupported
+        value such as ``"zvideo"``.
+    :returns: ``"answers"``, ``"articles"``, ``"pins"``, or ``None``.
+    """
+    return _COLLECTION_TYPE_TO_KIND.get(item_type)
+
+
+def _canonical_item_url(kind: str, item_id: str) -> str:
+    """Build the canonical Zhihu URL for a collection item.
+
+    Canonical URLs matter because :meth:`DownloadState.bootstrap` matches
+    ``/answer/<id>``, ``/p/<id>``, and ``/pin/<id>`` in the saved frontmatter's
+    ``source`` field.
+
+    :param kind: Manifest kind.
+    :param item_id: The item's numeric (or pin) ID.
+    :returns: The canonical web URL.
+    :raises ValueError: When *kind* is not a supported manifest kind.
+    """
+    if kind == "answers":
+        return f"https://www.zhihu.com/answer/{item_id}"
+    if kind == "articles":
+        return f"https://zhuanlan.zhihu.com/p/{item_id}"
+    if kind == "pins":
+        return f"https://www.zhihu.com/pin/{item_id}"
+    raise ValueError(f"unsupported collection item kind: {kind}")
+
+
+def _bucket_collection_items(items: list[dict]) -> tuple[dict[str, list[dict]], int]:
+    """Group collection items by download kind.
+
+    Unknown types (e.g. ``zvideo``) and items without an ID are dropped and
+    counted as unsupported.
+
+    :param items: Items from :func:`list_collection_contents`.
+    :returns: ``(buckets, unsupported_count)``, where *buckets* always has the
+        keys ``"answers"``, ``"articles"``, and ``"pins"``.
+    """
+    buckets: dict[str, list[dict]] = {kind: [] for kind in _ITEM_TASK_KINDS}
+    unsupported = 0
+    for item in items:
+        kind = _collection_kind(str(item.get("type", "")))
+        if kind is None or not str(item.get("id", "")):
+            unsupported += 1
+            continue
+        buckets[kind].append(item)
+    return buckets, unsupported
 
 
 @click.group()
@@ -530,46 +778,14 @@ def download_user(
             info(f"\nFetching answers list for {user_name}...")
             answer_items = fetch_member_answers(url_token, max_items=max_items, since=since)
             state.bootstrap("answers", answers_dir)
-            pending = (
-                answer_items
-                if force
-                else [
-                    item
-                    for item in answer_items
-                    if not state.is_fresh("answers", str(item.get("id", "")), item.get("updated_time"))
-                ]
-            )
+            pending = _pending_items(answer_items, "answers", state, force)
             skipped["answers"] = len(answer_items) - len(pending)
             detail = f"answers ({len(pending)} pending, {skipped['answers']} skipped)."
             echo(f"  {f_label('Found')} {f_num(len(answer_items))} {f_dim(detail)}")
 
             def answer_task(index: int, item: dict) -> dict:
                 wait(delay)
-                try:
-                    meta, md = scrape_answer_page(item["url"])
-                    save_meta = {
-                        "title": meta.get("title", "untitled"),
-                        "author": meta.get("author", "unknown"),
-                        "created": meta.get("created", "unknown"),
-                    }
-                    filepath = save_article(item["url"], save_meta, md, answers_dir, with_media=with_media)
-                    with _output_lock:
-                        echo(
-                            f"  {item_index(index, len(pending))} {save_meta['title'][:50]}"
-                            f" -> {f_path(os.path.basename(filepath))}"
-                        )
-                    return {
-                        "status": "ok",
-                        "kind": "answers",
-                        "id": str(item.get("id", "")),
-                        "url": item["url"],
-                        "updated_time": item.get("updated_time"),
-                        "filepath": filepath,
-                    }
-                except Exception as e:
-                    with _output_lock:
-                        error(f"  {item_index(index, len(pending))} Error: {e}")
-                    return {"status": "error", "kind": "answers", "url": item.get("url", ""), "error": str(e)}
+                return _answer_item_task(index, len(pending), item, answers_dir, with_media)
 
             _run_items(pending, concurrency, answer_task, _handle)
 
@@ -578,48 +794,14 @@ def download_user(
             info(f"\nFetching articles list for {user_name}...")
             article_items = fetch_member_articles(url_token, max_items=max_items, since=since)
             state.bootstrap("articles", articles_dir)
-            pending = (
-                article_items
-                if force
-                else [
-                    item
-                    for item in article_items
-                    if not state.is_fresh("articles", str(item.get("id", "")), item.get("updated_time"))
-                ]
-            )
+            pending = _pending_items(article_items, "articles", state, force)
             skipped["articles"] = len(article_items) - len(pending)
             detail = f"articles ({len(pending)} pending, {skipped['articles']} skipped)."
             echo(f"  {f_label('Found')} {f_num(len(article_items))} {f_dim(detail)}")
 
             def article_task(index: int, item: dict) -> dict:
                 wait(delay)
-                try:
-                    meta, md = scrape_article(item["url"])
-                    author = meta.get("author", {})
-                    author_name = author.get("name", "unknown") if isinstance(author, dict) else str(author)
-                    save_meta = {
-                        "title": meta.get("title", "untitled"),
-                        "author": author_name,
-                        "created": (meta.get("created_time", "unknown") or "unknown")[:10],
-                    }
-                    filepath = save_article(item["url"], save_meta, md, articles_dir, with_media=with_media)
-                    with _output_lock:
-                        echo(
-                            f"  {item_index(index, len(pending))} {save_meta['title'][:50]}"
-                            f" -> {f_path(os.path.basename(filepath))}"
-                        )
-                    return {
-                        "status": "ok",
-                        "kind": "articles",
-                        "id": str(item.get("id", "")),
-                        "url": item["url"],
-                        "updated_time": item.get("updated_time"),
-                        "filepath": filepath,
-                    }
-                except Exception as e:
-                    with _output_lock:
-                        error(f"  {item_index(index, len(pending))} Error: {e}")
-                    return {"status": "error", "kind": "articles", "url": item.get("url", ""), "error": str(e)}
+                return _article_item_task(index, len(pending), item, articles_dir, with_media)
 
             _run_items(pending, concurrency, article_task, _handle)
 
@@ -628,46 +810,14 @@ def download_user(
             info(f"\nFetching pins list for {user_name}...")
             pin_items = fetch_member_pins(url_token, max_items=max_items, since=since)
             state.bootstrap("pins", pins_dir)
-            pending = (
-                pin_items
-                if force
-                else [
-                    item
-                    for item in pin_items
-                    if not state.is_fresh("pins", str(item.get("id", "")), item.get("updated_time"))
-                ]
-            )
+            pending = _pending_items(pin_items, "pins", state, force)
             skipped["pins"] = len(pin_items) - len(pending)
             detail = f"pins ({len(pending)} pending, {skipped['pins']} skipped)."
             echo(f"  {f_label('Found')} {f_num(len(pin_items))} {f_dim(detail)}")
 
             def pin_task(index: int, item: dict) -> dict:
                 wait(delay)
-                try:
-                    meta, md = scrape_pin(item["url"])
-                    author = meta.get("author", {})
-                    author_name = author.get("name", "unknown") if isinstance(author, dict) else str(author)
-                    save_meta = {
-                        "author": author_name,
-                        "created": (meta.get("created_time", "unknown") or "unknown")[:10],
-                        "pin_id": str(meta.get("id", "")),
-                    }
-                    filepath = save_pin(item["url"], save_meta, md, pins_dir, with_media=with_media)
-                    preview = (meta.get("excerpt", "") or "")[:30]
-                    with _output_lock:
-                        echo(f"  {item_index(index, len(pending))} {preview} -> {f_path(os.path.basename(filepath))}")
-                    return {
-                        "status": "ok",
-                        "kind": "pins",
-                        "id": str(item.get("id", "")),
-                        "url": item["url"],
-                        "updated_time": item.get("updated_time"),
-                        "filepath": filepath,
-                    }
-                except Exception as e:
-                    with _output_lock:
-                        error(f"  {item_index(index, len(pending))} Error: {e}")
-                    return {"status": "error", "kind": "pins", "url": item.get("url", ""), "error": str(e)}
+                return _pin_item_task(index, len(pending), item, pins_dir, with_media)
 
             _run_items(pending, concurrency, pin_task, _handle)
     finally:
@@ -691,6 +841,173 @@ def download_user(
         return
 
     section(f"Done! Downloaded from {f_name(user_name)}:")
+    echo(f"  {f_label('Answers:')}  {f_num(downloaded['answers'])}")
+    echo(f"  {f_label('Articles:')} {f_num(downloaded['articles'])}")
+    echo(f"  {f_label('Pins:')}     {f_num(downloaded['pins'])}")
+    echo(f"  {f_label('Skipped:')}  {f_num(sum(skipped.values()))}")
+    echo(f"  {f_label('Failed:')}   {f_num(len(failed))}")
+    echo(f"  {f_label('Output:')}   {f_path(str(base_dir))}")
+    if failed and not any(downloaded.values()):
+        raise SystemExit(1)
+
+
+@download.command("collection")
+@click.argument("collection")
+@click.option(
+    "--output-dir",
+    "-o",
+    default=None,
+    help="Base output directory (default: ~/.zhihu-cli/downloads/collections/<title>_<id>)",
+)
+@click.option("--delay", "-d", type=float, default=1.0, help="Delay between requests in seconds")
+@click.option("--max", "-n", "max_items", type=int, default=None, help="Max collection items (default: all)")
+@click.option(
+    "--concurrency",
+    "-j",
+    type=click.IntRange(1, 32),
+    default=4,
+    show_default=True,
+    help="Number of parallel downloads",
+)
+@click.option("--force", is_flag=True, default=False, help="Re-download items already recorded in the state file")
+@click.option("--with-media", is_flag=True, default=False, help="Download images/videos alongside Markdown")
+@click.option("--json", "output_json", is_flag=True, default=False, help="Output as JSON")
+def download_collection(
+    collection: str,
+    output_dir: str | None,
+    delay: float,
+    max_items: int | None,
+    concurrency: int,
+    force: bool,
+    with_media: bool,
+    output_json: bool,
+) -> None:
+    """Download all answers, articles, and pins in a Zhihu collection.
+
+    COLLECTION may be a ``https://www.zhihu.com/collection/<id>`` URL or a bare
+    numeric collection ID. Incremental sync is on by default: items whose local
+    file exists and whose listing timestamp has not advanced are skipped. Use
+    --force to re-download everything.
+    """
+    set_json_mode(output_json)
+    collection_id = _parse_collection_id(collection)
+
+    meta = get_collection_meta(collection_id)
+    title = meta.get("title", "") or ""
+    creator = meta.get("creator", {})
+    creator_name = creator.get("name", "") if isinstance(creator, dict) else str(creator)
+    echo(f"  {f_label('Collection:')} {f_title(title or '(untitled)')} ({f_meta(creator_name or 'unknown')})")
+
+    if output_dir is None:
+        # Collection titles are not unique (several can be called "My
+        # Collection"), so the id keeps their output directories apart.
+        folder = sanitize_filename(title) if title else ""
+        base_dir = (
+            get_data_dir() / "downloads" / "collections" / (f"{folder}_{collection_id}" if folder else collection_id)
+        )
+    else:
+        base_dir = Path(output_dir)
+
+    downloaded: dict[str, int] = {"answers": 0, "articles": 0, "pins": 0}
+    skipped: dict[str, int] = {"answers": 0, "articles": 0, "pins": 0}
+    failed: list[dict[str, str]] = []
+
+    items = list_collection_contents(collection_id, max_items=max_items)
+    buckets, unsupported = _bucket_collection_items(items)
+    item_count = meta.get("item_count")
+    if item_count is None:
+        item_count = len(items)
+    if unsupported:
+        warning(f"Skipped {unsupported} unsupported or unidentified item(s).")
+
+    state = DownloadState(str(base_dir))
+    state.load()
+
+    def _handle(outcome: dict) -> None:
+        """Update counters and the manifest from a worker outcome."""
+        kind = outcome["kind"]
+        if outcome["status"] != "ok":
+            failed.append({"url": outcome.get("url", ""), "error": outcome["error"]})
+            return
+
+        downloaded[kind] += 1
+        relpath = os.path.relpath(outcome["filepath"], str(base_dir)).replace(os.sep, "/")
+        previous = state.get(kind, outcome["id"])
+        state.record(
+            kind,
+            outcome["id"],
+            url=outcome["url"],
+            updated_time=outcome.get("updated_time"),
+            filepath=relpath,
+        )
+        if previous is not None:
+            delete_stale_file(str(base_dir), str(previous.get("filepath") or ""), relpath, state)
+
+    try:
+        for kind in _ITEM_TASK_KINDS:
+            batch = buckets[kind]
+            if not batch:
+                continue
+
+            kind_dir = str(base_dir / kind)
+            state.bootstrap(kind, kind_dir)
+            pending = _pending_items(batch, kind, state, force)
+            skipped[kind] = len(batch) - len(pending)
+            detail = f"{kind} ({len(pending)} pending, {skipped[kind]} skipped)."
+            echo(f"  {f_label('Found')} {f_num(len(batch))} {f_dim(detail)}")
+            if not pending:
+                continue
+
+            helper = _ITEM_TASK_HELPERS[kind]
+            total = len(pending)
+
+            def task(
+                index: int,
+                item: dict,
+                _helper=helper,
+                _kind=kind,
+                _dir=kind_dir,
+                _total=total,
+            ) -> dict:
+                wait(delay)
+                item_id = str(item.get("id", ""))
+                return _helper(
+                    index,
+                    _total,
+                    item,
+                    _dir,
+                    with_media,
+                    url=_canonical_item_url(_kind, item_id),
+                    item_id=item_id,
+                )
+
+            _run_items(pending, concurrency, task, _handle)
+    finally:
+        state.save()
+
+    if output_json:
+        print_json(
+            {
+                "collection": {
+                    "id": collection_id,
+                    "title": title,
+                    "creator": creator_name,
+                    "item_count": item_count,
+                },
+                "downloaded": downloaded,
+                "skipped": skipped,
+                "unsupported": unsupported,
+                "concurrency": concurrency,
+                "base_dir": str(base_dir),
+                "failed": failed,
+                "failure_count": len(failed),
+            }
+        )
+        if failed and not any(downloaded.values()):
+            raise SystemExit(1)
+        return
+
+    section(f"Done! Downloaded from collection {f_title(title or collection_id)}:")
     echo(f"  {f_label('Answers:')}  {f_num(downloaded['answers'])}")
     echo(f"  {f_label('Articles:')} {f_num(downloaded['articles'])}")
     echo(f"  {f_label('Pins:')}     {f_num(downloaded['pins'])}")

@@ -43,6 +43,10 @@ def delete_collection(collection_id: str) -> dict[str, Any]:
 def get_collection_meta(collection_id: str) -> dict[str, Any]:
     """Fetch metadata for a single collection (title, creator, counts, etc.).
 
+    The collection endpoint answers with the collection object itself rather
+    than wrapping it in ``{"collection": ...}``; an older wrapped shape is
+    still tolerated.
+
     :param collection_id: Numeric collection ID.
     :returns: Collection metadata dict (empty dict on failure).
     """
@@ -53,7 +57,12 @@ def get_collection_meta(collection_id: str) -> dict[str, Any]:
         "%2Ccreated_time%2Cupdated_time"
     )
     data = _safe_json(resp)
-    return data.get("collection", {})
+    if not isinstance(data, dict):
+        return {}
+    if data.get("type") == "collection":
+        return data
+    wrapped = data.get("collection")
+    return wrapped if isinstance(wrapped, dict) else {}
 
 
 def _parse_collection_contents(data: dict[str, Any]) -> Iterable[dict[str, Any]]:
