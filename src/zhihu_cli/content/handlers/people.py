@@ -111,6 +111,36 @@ def fetch_member_error_message(url_token: str) -> str | None:
         return None
 
 
+# ── incremental listing helper ──────────────────────────────────────────────
+
+
+def _until_since(items: Iterable[dict[str, Any]], since: str | None) -> Iterable[dict[str, Any]]:
+    """Yield items until one predates *since*, relying on descending order.
+
+    Member listings use ``sort_by=created`` and are newest-first, so the walk
+    can stop at the first item older than *since* instead of paginating to the
+    end.  The check is intentionally one-way: ascending input simply yields
+    nothing once an old item is seen, because order is the caller's contract.
+
+    Items whose ``created_time`` is not a date (e.g. ``"unknown time"``) are
+    yielded rather than treated as the stop condition.
+
+    :param items: Parsed listing items, newest first.
+    :param since: Inclusive lower bound (``YYYY-MM-DD`` or
+        ``YYYY-MM-DD HH:MM:SS``), or ``None`` to yield everything.
+    :returns: A generator of the items at or after *since*.
+    """
+    if not since:
+        yield from items
+        return
+
+    for item in items:
+        created = item.get("created_time") or ""
+        if created[:1].isdigit() and created[:10] < since[:10]:
+            return
+        yield item
+
+
 # ── answer list ─────────────────────────────────────────────────────────────
 
 
@@ -140,15 +170,24 @@ def fetch_member_answers(
     url_token: str,
     limit: int = PAGE_SIZE,
     max_items: int | None = None,
+    since: str | None = None,
 ) -> list[dict[str, Any]]:
-    """Fetch a member's answers list."""
+    """Fetch a member's answers list.
+
+    :param url_token: The member's url_token.
+    :param limit: Page size for each API request.
+    :param max_items: Maximum total items to return.
+    :param since: Stop paginating at the first answer created before this
+        ``YYYY-MM-DD`` / ``YYYY-MM-DD HH:MM:SS`` value.  Relies on the
+        newest-first order of ``sort_by=created``.
+    """
     url = (
         f"{MEMBER_API.format(token=url_token)}/answers"
         f"?include=data%5B%2A%5D.excerpt%2Cdata%5B%2A%5D.voteup_count"
         f"%2Cdata%5B%2A%5D.comment_count%2Cdata%5B%2A%5D.is_copyable"
         f"&offset=0&limit={limit}&sort_by=created"
     )
-    return list(stream_handler(url, _parse_answer_list, max_items=max_items))
+    return list(_until_since(stream_handler(url, _parse_answer_list, max_items=max_items), since))
 
 
 # ── article list ────────────────────────────────────────────────────────────
@@ -177,12 +216,20 @@ def fetch_member_articles(
     url_token: str,
     limit: int = PAGE_SIZE,
     max_items: int | None = None,
+    since: str | None = None,
 ) -> list[dict[str, Any]]:
     """Fetch a member's articles list.
 
     The articles endpoint answers HTTP 500 when the ``x-app-za`` /
     ``x-app-version`` app-identity headers are present, so they are omitted
     here.
+
+    :param url_token: The member's url_token.
+    :param limit: Page size for each API request.
+    :param max_items: Maximum total items to return.
+    :param since: Stop paginating at the first article created before this
+        ``YYYY-MM-DD`` / ``YYYY-MM-DD HH:MM:SS`` value.  Relies on the
+        newest-first order of ``sort_by=created``.
     """
     url = (
         f"{MEMBER_API.format(token=url_token)}/articles"
@@ -190,7 +237,8 @@ def fetch_member_articles(
         f"%2Cdata%5B%2A%5D.comment_count"
         f"&offset=0&limit={limit}&sort_by=created"
     )
-    return list(stream_handler(url, _parse_article_list, max_items=max_items, skip_app_headers=True))
+    stream = stream_handler(url, _parse_article_list, max_items=max_items, skip_app_headers=True)
+    return list(_until_since(stream, since))
 
 
 # ── pin list ────────────────────────────────────────────────────────────────
@@ -211,6 +259,9 @@ def _parse_member_pin(item: dict[str, Any]) -> dict[str, Any]:
         "content_text": content,
         "url": f"https://www.zhihu.com/pin/{item.get('id', '')}",
         "created_time": fmt_time(item.get("created")),
+        # The pin payload carries a real ``updated`` timestamp; exposing it is
+        # what lets incremental downloads notice an edited pin.
+        "updated_time": fmt_time(item.get("updated")),
         "voteup_count": item.get("voteup_count", 0),
         "comment_count": item.get("comment_count", 0),
     }
@@ -225,15 +276,24 @@ def fetch_member_pins(
     url_token: str,
     limit: int = PAGE_SIZE,
     max_items: int | None = None,
+    since: str | None = None,
 ) -> list[dict[str, Any]]:
-    """Fetch a member's pins (想法) list."""
+    """Fetch a member's pins (想法) list.
+
+    :param url_token: The member's url_token.
+    :param limit: Page size for each API request.
+    :param max_items: Maximum total items to return.
+    :param since: Stop paginating at the first pin created before this
+        ``YYYY-MM-DD`` / ``YYYY-MM-DD HH:MM:SS`` value.  Relies on the
+        newest-first order of ``sort_by=created``.
+    """
     url = (
         f"{MEMBER_API.format(token=url_token)}/pins"
         f"?include=data%5B%2A%5D.excerpt%2Cdata%5B%2A%5D.content"
         f"%2Cdata%5B%2A%5D.voteup_count%2Cdata%5B%2A%5D.comment_count"
         f"&offset=0&limit={limit}&sort_by=created"
     )
-    return list(stream_handler(url, _parse_pin_list, max_items=max_items))
+    return list(_until_since(stream_handler(url, _parse_pin_list, max_items=max_items), since))
 
 
 # ── question list ───────────────────────────────────────────────────────────

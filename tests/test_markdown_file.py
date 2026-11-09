@@ -10,6 +10,7 @@ import pytest
 from zhihu_cli.content.utils.markdown_file import (
     build_yaml_frontmatter,
     get_safe_filename,
+    read_frontmatter,
     safe_path,
     sanitize_filename,
     write_markdown,
@@ -81,3 +82,31 @@ def test_write_markdown_requires_metadata_with_frontmatter(tmp_path) -> None:
     """Frontmatter output without metadata is rejected."""
     with pytest.raises(ValueError):
         write_markdown(None, "body", str(tmp_path), filename="note")
+
+
+def test_read_frontmatter_round_trips(tmp_path) -> None:
+    """A written frontmatter block can be read back as a mapping."""
+    path = write_markdown({"title": "hello", "source": "https://example.com"}, "body", str(tmp_path), filename="note")
+
+    assert read_frontmatter(path) == {"title": "hello", "source": "https://example.com"}
+
+
+def test_read_frontmatter_without_frontmatter(tmp_path) -> None:
+    """Plain Markdown yields an empty mapping."""
+    path = Path(tmp_path) / "plain.md"
+    path.write_text("just a body\n", encoding="utf-8")
+
+    assert read_frontmatter(str(path)) == {}
+
+
+def test_read_frontmatter_malformed_yaml(tmp_path) -> None:
+    """Unparseable frontmatter yields an empty mapping."""
+    path = Path(tmp_path) / "broken.md"
+    path.write_text("---\ntitle: [unclosed\n---\n\nbody\n", encoding="utf-8")
+
+    assert read_frontmatter(str(path)) == {}
+
+
+def test_read_frontmatter_missing_file(tmp_path) -> None:
+    """A missing file yields an empty mapping."""
+    assert read_frontmatter(str(Path(tmp_path) / "missing.md")) == {}

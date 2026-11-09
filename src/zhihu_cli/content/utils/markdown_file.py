@@ -17,6 +17,7 @@ from typing import Any
 __all__ = [
     "build_yaml_frontmatter",
     "get_safe_filename",
+    "read_frontmatter",
     "safe_path",
     "sanitize_filename",
     "write_markdown",
@@ -122,6 +123,41 @@ def build_yaml_frontmatter(metadata: dict[str, Any]) -> str:
 
     body = yaml.safe_dump(metadata, allow_unicode=True, sort_keys=False).strip()
     return f"---\n{body}\n---\n\n"
+
+
+def read_frontmatter(filepath: str) -> dict[str, Any]:
+    """Read the YAML frontmatter block from a Markdown file.
+
+    ``yaml`` is imported lazily so the module stays stdlib-only on import.
+
+    :param filepath: Path to the Markdown file.
+    :returns: The parsed frontmatter mapping, or ``{}`` when the file is
+        missing, has no frontmatter, or the block cannot be parsed as a
+        mapping.
+    """
+    try:
+        with open(filepath, encoding="utf-8") as f:
+            content = f.read()
+    except (OSError, UnicodeDecodeError):
+        return {}
+
+    lines = content.splitlines()
+    if not lines or lines[0].strip() != "---":
+        return {}
+
+    end = next((index for index, line in enumerate(lines[1:], start=1) if line.strip() == "---"), None)
+    if end is None:
+        return {}
+
+    block = "\n".join(lines[1:end])
+    try:
+        import yaml  # deferred: only needed when reading download files
+
+        data = yaml.safe_load(block)
+    except Exception:
+        return {}
+
+    return data if isinstance(data, dict) else {}
 
 
 def write_markdown(

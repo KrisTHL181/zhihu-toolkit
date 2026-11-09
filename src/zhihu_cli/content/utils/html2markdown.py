@@ -8,6 +8,7 @@ Adapted from the Tampermonkey script "zhihu-backup-collect".
 from __future__ import annotations
 
 import re
+import threading
 from typing import TYPE_CHECKING
 from urllib.parse import parse_qs, urlparse
 
@@ -226,10 +227,28 @@ class PageToMarkdown:
     def __init__(self, skip_empty: bool = True) -> None:
         self.skip_empty = skip_empty
         self.link_converter = ZhihuLinkConverter()
-        #: Citations collected during the current :meth:`convert` run, keyed by
-        #: citation number and holding a ``(title, url)`` pair. Reset on every
-        #: call, since one instance may convert several documents in a row.
-        self._references: dict[str, tuple[str, str]] = {}
+        # The module-level ``converter`` singleton is shared by parallel
+        # download workers, and ``convert()`` resets the citation collection on
+        # every call. A plain attribute would let one thread wipe another's
+        # citations mid-conversion, so the collection is stored per thread.
+        self._local = threading.local()
+
+    @property
+    def _references(self) -> dict[str, tuple[str, str]]:
+        """Citations collected by this thread during the current conversion.
+
+        :returns: The per-thread ``number -> (title, url)`` mapping, created
+            lazily on first access.
+        """
+        references = getattr(self._local, "references", None)
+        if references is None:
+            references = {}
+            self._local.references = references
+        return references
+
+    @_references.setter
+    def _references(self, value: dict[str, tuple[str, str]]) -> None:
+        self._local.references = value
 
     # ── LaTeX pre-processing ──────────────────────────────────────────────
 

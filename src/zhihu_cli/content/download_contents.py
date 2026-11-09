@@ -5,9 +5,13 @@ import mimetypes
 import os
 import re
 import sys
+import threading
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime
+from typing import TYPE_CHECKING
 from urllib.parse import urlparse
 
+from zhihu_cli.content.download_state import delete_stale_file, derive_id
 from zhihu_cli.content.handlers.article import fetch_article_item, parse_article_metadata
 from zhihu_cli.content.handlers.cache_manager import cache_manager
 from zhihu_cli.content.handlers.pin import scrape_pin
@@ -23,6 +27,9 @@ from zhihu_cli.content.utils.markdown_file import (
 from zhihu_cli.content.utils.wait import wait
 from zhihu_cli.daemon.proxy import DaemonHTTPError
 from zhihu_cli.paths import zhihu_home
+
+if TYPE_CHECKING:
+    from zhihu_cli.content.download_state import DownloadState
 
 __all__ = [
     "ContentDownloader",
@@ -40,10 +47,19 @@ __all__ = [
 
 _orig_print = print
 
+#: Parallel workers print progress lines; serialise them so lines never mix.
+_print_lock = threading.Lock()
+
+#: Parallel workers also pick media filenames; the check-then-create loop below
+#: is racy without a lock, and two items sharing an alt-text stem would
+#: otherwise overwrite each other's image.
+_media_lock = threading.Lock()
+
 
 def _cli_print(*args: object, **kwargs: object) -> None:
     """Print to stderr (avoids stdout pollution during --json mode)."""
-    _orig_print(*args, file=sys.stderr, **kwargs)
+    with _print_lock:
+        _orig_print(*args, file=sys.stderr, **kwargs)
 
 
 # ── media download helpers ──────────────────────────────────────────────────
@@ -129,17 +145,21 @@ def download_media_files(markdown: str, output_dir: str, progress_callback: obje
 
             stem = hashlib.sha256(url.encode()).hexdigest()[:12]
 
-        # Deduplicate within this batch
-        candidate = f"{stem}{ext}"
-        filepath = os.path.join(media_dir, candidate)
-        counter = 1
-        while os.path.exists(filepath):
-            candidate = f"{stem}_{counter}{ext}"
+        # Deduplicate within this batch.  Parallel downloads share the media
+        # directory, so claiming a name and writing the bytes has to happen
+        # under one lock; otherwise two threads can both see a free name and
+        # overwrite each other.
+        with _media_lock:
+            candidate = f"{stem}{ext}"
             filepath = os.path.join(media_dir, candidate)
-            counter += 1
+            counter = 1
+            while os.path.exists(filepath):
+                candidate = f"{stem}_{counter}{ext}"
+                filepath = os.path.join(media_dir, candidate)
+                counter += 1
 
-        with open(filepath, "wb") as f:
-            f.write(resp.content)
+            with open(filepath, "wb") as f:
+                f.write(resp.content)
 
         rel_path = os.path.join("media", candidate)
         url_to_local[url] = rel_path
@@ -298,74 +318,145 @@ class ContentDownloader:
         _cli_print("[Success] Headers configured and cached.")
         return True
 
-    def download_answers(self, urls: list[str], delay: float = 1.0) -> list[dict]:
+    def _record_state(self, state: DownloadState | None, kind: str, url: str, result: dict) -> None:
+        """Record a successful download in the incremental manifest.
+
+        :param state: Manifest, or ``None`` to skip bookkeeping.
+        :param kind: Content kind used as the manifest key prefix.
+        :param url: The URL that produced *result*.
+        :param result: A result dict from one of the download methods.
+        """
+        if state is None or not result.get("success") or not result.get("filepath"):
+            return
+        item_id = derive_id(kind, url)
+        if item_id is None:
+            return
+        relpath = os.path.relpath(result["filepath"], self.output_dir).replace(os.sep, "/")
+        previous = state.get(kind, item_id)
+        state.record(kind, item_id, url=url, updated_time=None, filepath=relpath)
+        if previous is not None:
+            delete_stale_file(self.output_dir, str(previous.get("filepath") or ""), relpath, state)
+
+    def _pending_urls(
+        self,
+        urls: list[str],
+        *,
+        state: DownloadState | None,
+        kind: str,
+        force: bool,
+    ) -> list[str]:
+        """Drop URLs whose item is already downloaded, unless *force* is set.
+
+        :param urls: Candidate URLs.
+        :param state: Manifest, or ``None`` to keep every URL.
+        :param kind: Content kind used to derive the item id.
+        :param force: When true, keep every URL.
+        :returns: The URLs that still need downloading.
+        """
+        if state is None or force:
+            return urls
+        return [url for url in urls if not state.is_fresh(kind, derive_id(kind, url) or "", None)]
+
+    def _answer_result(self, url: str) -> dict:
+        """Download one answer, returning the per-item result dict."""
+        try:
+            metadata, answer_markdown = scrape_answer_page(url)
+
+            meta = {
+                "title": metadata.get("title", "untitled"),
+                "question_detail": metadata.get("question_detail", ""),
+                "author": metadata.get("author", "unknown"),
+                "created": metadata.get("created", "unknown"),
+            }
+            filepath = save_article(url, meta, answer_markdown, self.output_dir, with_media=self.with_media)
+
+            _cli_print(f"[Success] {url}")
+            _cli_print(f"  -> {filepath}")
+            _cli_print(f"  Question: {meta['title']}")
+            _cli_print(f"  Author: {meta['author']}")
+            _cli_print(f"  Time: {meta['created']}")
+
+            return {
+                "url": url,
+                "title": meta["title"],
+                "author": meta["author"],
+                "filepath": filepath,
+                "success": True,
+                "error": None,
+            }
+        except TimeoutError:
+            _cli_print(f"[Timeout] {url}")
+            return {
+                "url": url,
+                "title": None,
+                "author": None,
+                "filepath": None,
+                "success": False,
+                "error": "Timeout",
+            }
+        except Exception as e:
+            _cli_print(f"[Error] Failed to process {url}: {e}")
+            return {
+                "url": url,
+                "title": None,
+                "author": None,
+                "filepath": None,
+                "success": False,
+                "error": str(e),
+            }
+
+    def download_answers(
+        self,
+        urls: list[str],
+        delay: float = 1.0,
+        *,
+        concurrency: int = 1,
+        state: DownloadState | None = None,
+        kind: str = "answers",
+        force: bool = False,
+    ) -> list[dict]:
         """Download answer pages and convert to Markdown.
 
+        :param urls: Answer URLs to download.
+        :param delay: Throttle delay before each item.
+        :param concurrency: Number of worker threads; ``1`` runs sequentially.
+        :param state: Optional incremental manifest to filter and record
+            against.
+        :param kind: Manifest key prefix for this content type.
+        :param force: Re-download items even when the manifest says they are
+            fresh.
         :returns: list of result dicts with keys ``url``, ``title``, ``author``,
-            ``filepath``, ``success``, and ``error``.
+            ``filepath``, ``success``, and ``error``.  In parallel mode the
+            results are in completion order.
         """
         results: list[dict] = []
         if not self.headers:
             _cli_print("[Error] Load headers first")
             return results
 
-        for url in urls:
-            try:
-                metadata, answer_markdown = scrape_answer_page(url)
+        pending = self._pending_urls(urls, state=state, kind=kind, force=force)
 
-                meta = {
-                    "title": metadata.get("title", "untitled"),
-                    "question_detail": metadata.get("question_detail", ""),
-                    "author": metadata.get("author", "unknown"),
-                    "created": metadata.get("created", "unknown"),
-                }
-                filepath = save_article(url, meta, answer_markdown, self.output_dir, with_media=self.with_media)
+        if concurrency <= 1:
+            for url in pending:
+                result = self._answer_result(url)
+                results.append(result)
+                if result["success"]:
+                    self._record_state(state, kind, url, result)
+                    wait(delay)
+            return results
 
-                results.append(
-                    {
-                        "url": url,
-                        "title": meta["title"],
-                        "author": meta["author"],
-                        "filepath": filepath,
-                        "success": True,
-                        "error": None,
-                    }
-                )
-
-                _cli_print(f"[Success] {url}")
-                _cli_print(f"  -> {filepath}")
-                _cli_print(f"  Question: {meta['title']}")
-                _cli_print(f"  Author: {meta['author']}")
-                _cli_print(f"  Time: {meta['created']}")
-
-            except TimeoutError:
-                results.append(
-                    {
-                        "url": url,
-                        "title": None,
-                        "author": None,
-                        "filepath": None,
-                        "success": False,
-                        "error": "Timeout",
-                    }
-                )
-                _cli_print(f"[Timeout] {url}")
-                continue
-            except Exception as e:
-                results.append(
-                    {
-                        "url": url,
-                        "title": None,
-                        "author": None,
-                        "filepath": None,
-                        "success": False,
-                        "error": str(e),
-                    }
-                )
-                _cli_print(f"[Error] Failed to process {url}: {e}")
-                continue
+        def task(url: str) -> dict:
             wait(delay)
+            return self._answer_result(url)
 
+        with ThreadPoolExecutor(max_workers=concurrency) as executor:
+            futures = {executor.submit(task, url): url for url in pending}
+            for future in as_completed(futures):
+                url = futures[future]
+                result = future.result()
+                results.append(result)
+                if result["success"]:
+                    self._record_state(state, kind, url, result)
         return results
 
     def fetch_article(self, url: str) -> tuple[dict[str, str], str]:
@@ -390,67 +481,99 @@ class ContentDownloader:
         markdown_content = self.md_converter.convert(content_html, url)
         return meta, markdown_content
 
-    def download_articles(self, urls: list[str], delay: float = 1.0) -> list[dict]:
+    def _article_result(self, url: str) -> dict:
+        """Download one article, returning the per-item result dict."""
+        try:
+            metadata, markdown_content = self.fetch_article(url)
+            filepath = save_article(url, metadata, markdown_content, self.output_dir, with_media=self.with_media)
+
+            _cli_print(f"[Success] {url}")
+            _cli_print(f"  -> {filepath}")
+            _cli_print(f"  Title: {metadata['title']}")
+            _cli_print(f"  Author: {metadata['author']}")
+            _cli_print(f"  Time: {metadata['created']}")
+
+            return {
+                "url": url,
+                "title": metadata["title"],
+                "author": metadata["author"],
+                "filepath": filepath,
+                "success": True,
+                "error": None,
+            }
+        except TimeoutError:
+            _cli_print(f"[Timeout] {url}")
+            return {
+                "url": url,
+                "title": None,
+                "author": None,
+                "filepath": None,
+                "success": False,
+                "error": "Timeout",
+            }
+        except Exception as e:
+            _cli_print(f"[Error] Failed to process {url}: {e}")
+            return {
+                "url": url,
+                "title": None,
+                "author": None,
+                "filepath": None,
+                "success": False,
+                "error": str(e),
+            }
+
+    def download_articles(
+        self,
+        urls: list[str],
+        delay: float = 1.0,
+        *,
+        concurrency: int = 1,
+        state: DownloadState | None = None,
+        kind: str = "articles",
+        force: bool = False,
+    ) -> list[dict]:
         """Download article pages and convert to Markdown.
 
+        :param urls: Article URLs to download.
+        :param delay: Throttle delay before each item.
+        :param concurrency: Number of worker threads; ``1`` runs sequentially.
+        :param state: Optional incremental manifest to filter and record
+            against.
+        :param kind: Manifest key prefix for this content type.
+        :param force: Re-download items even when the manifest says they are
+            fresh.
         :returns: list of result dicts with keys ``url``, ``title``, ``author``,
-            ``filepath``, ``success``, and ``error``.
+            ``filepath``, ``success``, and ``error``.  In parallel mode the
+            results are in completion order.
         """
         results: list[dict] = []
         if not self.headers:
             _cli_print("[Error] Load headers first")
             return results
 
-        for url in urls:
-            try:
-                metadata, markdown_content = self.fetch_article(url)
-                filepath = save_article(url, metadata, markdown_content, self.output_dir, with_media=self.with_media)
+        pending = self._pending_urls(urls, state=state, kind=kind, force=force)
 
-                results.append(
-                    {
-                        "url": url,
-                        "title": metadata["title"],
-                        "author": metadata["author"],
-                        "filepath": filepath,
-                        "success": True,
-                        "error": None,
-                    }
-                )
+        if concurrency <= 1:
+            for url in pending:
+                result = self._article_result(url)
+                results.append(result)
+                if result["success"]:
+                    self._record_state(state, kind, url, result)
+                    wait(delay)
+            return results
 
-                _cli_print(f"[Success] {url}")
-                _cli_print(f"  -> {filepath}")
-                _cli_print(f"  Title: {metadata['title']}")
-                _cli_print(f"  Author: {metadata['author']}")
-                _cli_print(f"  Time: {metadata['created']}")
-
-            except TimeoutError:
-                results.append(
-                    {
-                        "url": url,
-                        "title": None,
-                        "author": None,
-                        "filepath": None,
-                        "success": False,
-                        "error": "Timeout",
-                    }
-                )
-                _cli_print(f"[Timeout] {url}")
-                continue
-            except Exception as e:
-                results.append(
-                    {
-                        "url": url,
-                        "title": None,
-                        "author": None,
-                        "filepath": None,
-                        "success": False,
-                        "error": str(e),
-                    }
-                )
-                _cli_print(f"[Error] Failed to process {url}: {e}")
-                continue
+        def task(url: str) -> dict:
             wait(delay)
+            return self._article_result(url)
 
+        with ThreadPoolExecutor(max_workers=concurrency) as executor:
+            futures = {executor.submit(task, url): url for url in pending}
+            for future in as_completed(futures):
+                url = futures[future]
+                result = future.result()
+                results.append(result)
+                if result["success"]:
+                    self._record_state(state, kind, url, result)
         return results
 
     def download_pins(self, urls: list[str], delay: float = 1.0) -> None:

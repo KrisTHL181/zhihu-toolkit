@@ -4,6 +4,9 @@ from __future__ import annotations
 
 import json
 import os
+import threading
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from datetime import datetime
 from pathlib import Path
 
 import click
@@ -15,6 +18,7 @@ from zhihu_cli.content.download_contents import (
     save_article,
     save_pin,
 )
+from zhihu_cli.content.download_state import DownloadState, delete_stale_file
 from zhihu_cli.content.handlers import get_data_dir
 from zhihu_cli.content.handlers.article import scrape_article
 from zhihu_cli.content.handlers.people import (
@@ -52,6 +56,60 @@ from zhihu_cli.output import (
     success,
     warning,
 )
+
+#: Serialises progress lines emitted by parallel download workers.
+_output_lock = threading.Lock()
+
+
+def _parse_since(ctx: click.Context, param: click.Parameter, value: str | None) -> str | None:
+    """Validate ``--since`` as a date or date-time.
+
+    :raises click.BadParameter: When the value matches neither accepted shape.
+    """
+    if value is None:
+        return None
+    for fmt in ("%Y-%m-%d", "%Y-%m-%d %H:%M:%S"):
+        try:
+            parsed = datetime.strptime(value, fmt)
+        except ValueError:
+            continue
+        # Re-render so a non-padded value (``2024-1-1``) compares correctly
+        # against the zero-padded timestamps in the listings.
+        return parsed.strftime(fmt)
+    raise click.BadParameter("expected YYYY-MM-DD or 'YYYY-MM-DD HH:MM:SS'", ctx=ctx, param=param)
+
+
+def _run_items(
+    items: list,
+    concurrency: int,
+    task,
+    on_result,
+) -> None:
+    """Run *task* over *items*, sequentially or in a thread pool.
+
+    :param items: Items to process.
+    :param concurrency: Worker count; ``<= 1`` runs in the calling thread.
+    :param task: ``task(index, item)`` returning an outcome dict.
+    :param on_result: Called with each outcome (in completion order when
+        parallel).
+    """
+    if concurrency <= 1:
+        for index, item in enumerate(items, 1):
+            on_result(task(index, item))
+        return
+
+    executor = ThreadPoolExecutor(max_workers=concurrency)
+    try:
+        futures = [executor.submit(task, index, item) for index, item in enumerate(items, 1)]
+        for future in as_completed(futures):
+            on_result(future.result())
+    except BaseException:
+        # Do not make Ctrl-C wait for in-flight network requests: cancel what
+        # has not started and let the caller's finally save state first.
+        executor.shutdown(wait=False, cancel_futures=True)
+        raise
+    else:
+        executor.shutdown(wait=True)
 
 
 @click.group()
@@ -224,11 +282,27 @@ def download_video(url: str, output_dir: str, output_json: bool, no_download_vid
     help="Output directory",
 )
 @click.option("--delay", "-d", type=float, default=1.0, help="Delay between requests (seconds)")
+@click.option(
+    "--concurrency",
+    "-j",
+    type=click.IntRange(1, 32),
+    default=4,
+    show_default=True,
+    help="Number of parallel downloads",
+)
+@click.option("--force", is_flag=True, default=False, help="Re-download items already recorded in the state file")
 @click.option("--no-cache-headers", is_flag=True, help="Force re-paste of cURL")
 @click.option("--with-media", is_flag=True, default=False, help="Download images/videos alongside Markdown")
 @click.option("--json", "output_json", is_flag=True, default=False, help="Output as JSON")
 def download_batch_answers(
-    input_file: str, output_dir: str, delay: float, no_cache_headers: bool, with_media: bool, output_json: bool
+    input_file: str,
+    output_dir: str,
+    delay: float,
+    concurrency: int,
+    force: bool,
+    no_cache_headers: bool,
+    with_media: bool,
+    output_json: bool,
 ) -> None:
     """Batch download all answers listed in an assets JSON file."""
     set_json_mode(output_json)
@@ -239,19 +313,41 @@ def download_batch_answers(
     with open(input_file, encoding="utf-8") as f:
         assets = json.load(f)
 
-    urls = [f"https://www.zhihu.com/answer/{a['id']}" for a in assets if a.get("type") == "answer"]
-    if not urls:
+    pairs = [(str(a["id"]), f"https://www.zhihu.com/answer/{a['id']}") for a in assets if a.get("type") == "answer"]
+    if not pairs:
         info("No answers found in the assets file.")
         return
 
-    echo(f"  {f_label('Found')} {f_num(len(urls))} {f_dim('answers.')}")
     dl = ContentDownloader(output_dir=output_dir, with_media=with_media)
     if not dl.load_headers_from_curl(quick_mode=not no_cache_headers):
         raise SystemExit(1)
-    results = dl.download_answers(urls, delay=delay)
-    if output_json:
-        print_json(results)
-        return
+
+    state = DownloadState(output_dir)
+    state.load()
+    try:
+        state.bootstrap("answers", output_dir)
+        if force:
+            selected = pairs
+        else:
+            selected = [(item_id, url) for item_id, url in pairs if not state.is_fresh("answers", item_id, None)]
+        skipped = len(pairs) - len(selected)
+
+        extra = f" {f_dim(f'{len(selected)} pending, {skipped} skipped.')}" if skipped else ""
+        echo(f"  {f_label('Found')} {f_num(len(pairs))} {f_dim('answers.')}{extra}")
+        if not selected:
+            if output_json:
+                print_json([])
+            return
+
+        urls = [url for _, url in selected]
+        results = dl.download_answers(
+            urls, delay=delay, concurrency=concurrency, state=state, kind="answers", force=force
+        )
+        if output_json:
+            print_json(results)
+            return
+    finally:
+        state.save()
 
 
 @download.command("batch-articles")
@@ -269,11 +365,27 @@ def download_batch_answers(
     help="Output directory",
 )
 @click.option("--delay", "-d", type=float, default=1.0, help="Delay between requests (seconds)")
+@click.option(
+    "--concurrency",
+    "-j",
+    type=click.IntRange(1, 32),
+    default=4,
+    show_default=True,
+    help="Number of parallel downloads",
+)
+@click.option("--force", is_flag=True, default=False, help="Re-download items already recorded in the state file")
 @click.option("--no-cache-headers", is_flag=True, help="Force re-paste of cURL")
 @click.option("--with-media", is_flag=True, default=False, help="Download images/videos alongside Markdown")
 @click.option("--json", "output_json", is_flag=True, default=False, help="Output as JSON")
 def download_batch_articles(
-    input_file: str, output_dir: str, delay: float, no_cache_headers: bool, with_media: bool, output_json: bool
+    input_file: str,
+    output_dir: str,
+    delay: float,
+    concurrency: int,
+    force: bool,
+    no_cache_headers: bool,
+    with_media: bool,
+    output_json: bool,
 ) -> None:
     """Batch download all articles listed in an assets JSON file."""
     set_json_mode(output_json)
@@ -284,19 +396,41 @@ def download_batch_articles(
     with open(input_file, encoding="utf-8") as f:
         assets = json.load(f)
 
-    urls = [f"https://zhuanlan.zhihu.com/p/{a['id']}" for a in assets if a.get("type") == "article"]
-    if not urls:
+    pairs = [(str(a["id"]), f"https://zhuanlan.zhihu.com/p/{a['id']}") for a in assets if a.get("type") == "article"]
+    if not pairs:
         info("No articles found in the assets file.")
         return
 
-    echo(f"  {f_label('Found')} {f_num(len(urls))} {f_dim('articles.')}")
     dl = ContentDownloader(output_dir=output_dir, with_media=with_media)
     if not dl.load_headers_from_curl(quick_mode=not no_cache_headers):
         raise SystemExit(1)
-    results = dl.download_articles(urls, delay=delay)
-    if output_json:
-        print_json(results)
-        return
+
+    state = DownloadState(output_dir)
+    state.load()
+    try:
+        state.bootstrap("articles", output_dir)
+        if force:
+            selected = pairs
+        else:
+            selected = [(item_id, url) for item_id, url in pairs if not state.is_fresh("articles", item_id, None)]
+        skipped = len(pairs) - len(selected)
+
+        extra = f" {f_dim(f'{len(selected)} pending, {skipped} skipped.')}" if skipped else ""
+        echo(f"  {f_label('Found')} {f_num(len(pairs))} {f_dim('articles.')}{extra}")
+        if not selected:
+            if output_json:
+                print_json([])
+            return
+
+        urls = [url for _, url in selected]
+        results = dl.download_articles(
+            urls, delay=delay, concurrency=concurrency, state=state, kind="articles", force=force
+        )
+        if output_json:
+            print_json(results)
+            return
+    finally:
+        state.save()
 
 
 @download.command("user")
@@ -316,6 +450,21 @@ def download_batch_articles(
     type=click.Choice(["answers", "articles", "pins", "all"]),
     help="Content types to download (default: all)",
 )
+@click.option(
+    "--since",
+    default=None,
+    callback=_parse_since,
+    help="Only fetch items created on/after YYYY-MM-DD (or 'YYYY-MM-DD HH:MM:SS')",
+)
+@click.option(
+    "--concurrency",
+    "-j",
+    type=click.IntRange(1, 32),
+    default=4,
+    show_default=True,
+    help="Number of parallel downloads",
+)
+@click.option("--force", is_flag=True, default=False, help="Re-download items already recorded in the state file")
 @click.option("--with-media", is_flag=True, default=False, help="Download images/videos alongside Markdown")
 @click.option("--json", "output_json", is_flag=True, default=False, help="Output as JSON")
 def download_user(
@@ -324,10 +473,18 @@ def download_user(
     delay: float,
     max_items: int | None,
     content_types: str,
+    since: str | None,
+    concurrency: int,
+    force: bool,
     with_media: bool,
     output_json: bool,
 ) -> None:
-    """Download all answers, articles, and pins from a Zhihu user."""
+    """Download all answers, articles, and pins from a Zhihu user.
+
+    Incremental sync is on by default: items whose local file exists and whose
+    listing timestamp has not advanced are skipped. Use --force to re-download
+    everything.
+    """
     set_json_mode(output_json)
     url_token = _extract_url_token(user)
 
@@ -341,87 +498,187 @@ def download_user(
         base_dir = Path(output_dir)
 
     downloaded: dict[str, int] = {"answers": 0, "articles": 0, "pins": 0}
+    skipped: dict[str, int] = {"answers": 0, "articles": 0, "pins": 0}
     failed: list[dict[str, str]] = []
 
-    if content_types in ("answers", "all"):
-        answers_dir = str(base_dir / "answers")
-        info(f"\nFetching answers list for {user_name}...")
-        answer_items = fetch_member_answers(url_token, max_items=max_items)
-        echo(f"  {f_label('Found')} {f_num(len(answer_items))} {f_dim('answers. Downloading full content...')}")
+    state = DownloadState(str(base_dir))
+    state.load()
 
-        for i, item in enumerate(answer_items, 1):
-            try:
-                meta, md = scrape_answer_page(item["url"])
-                save_meta = {
-                    "title": meta.get("title", "untitled"),
-                    "author": meta.get("author", "unknown"),
-                    "created": meta.get("created", "unknown"),
-                }
-                filepath = save_article(item["url"], save_meta, md, answers_dir, with_media=with_media)
-                echo(
-                    f"  {item_index(i, len(answer_items))} {save_meta['title'][:50]} -> {f_path(os.path.basename(filepath))}"
-                )
-                downloaded["answers"] += 1
-            except Exception as e:
-                failed.append({"url": item.get("url", ""), "error": str(e)})
-                error(f"  {item_index(i, len(answer_items))} Error: {e}")
-            wait(delay)
+    def _handle(outcome: dict) -> None:
+        """Update counters and the manifest from a worker outcome."""
+        kind = outcome["kind"]
+        if outcome["status"] != "ok":
+            failed.append({"url": outcome.get("url", ""), "error": outcome["error"]})
+            return
 
-    if content_types in ("articles", "all"):
-        articles_dir = str(base_dir / "articles")
-        info(f"\nFetching articles list for {user_name}...")
-        article_items = fetch_member_articles(url_token, max_items=max_items)
-        echo(f"  {f_label('Found')} {f_num(len(article_items))} {f_dim('articles. Downloading full content...')}")
+        downloaded[kind] += 1
+        relpath = os.path.relpath(outcome["filepath"], str(base_dir)).replace(os.sep, "/")
+        previous = state.get(kind, outcome["id"])
+        state.record(
+            kind,
+            outcome["id"],
+            url=outcome["url"],
+            updated_time=outcome.get("updated_time"),
+            filepath=relpath,
+        )
+        if previous is not None:
+            delete_stale_file(str(base_dir), str(previous.get("filepath") or ""), relpath, state)
 
-        for i, item in enumerate(article_items, 1):
-            try:
-                meta, md = scrape_article(item["url"])
-                author = meta.get("author", {})
-                author_name = author.get("name", "unknown") if isinstance(author, dict) else str(author)
-                save_meta = {
-                    "title": meta.get("title", "untitled"),
-                    "author": author_name,
-                    "created": (meta.get("created_time", "unknown") or "unknown")[:10],
-                }
-                filepath = save_article(item["url"], save_meta, md, articles_dir, with_media=with_media)
-                echo(
-                    f"  {item_index(i, len(article_items))} {save_meta['title'][:50]} -> {f_path(os.path.basename(filepath))}"
-                )
-                downloaded["articles"] += 1
-            except Exception as e:
-                failed.append({"url": item.get("url", ""), "error": str(e)})
-                error(f"  {item_index(i, len(article_items))} Error: {e}")
-            wait(delay)
+    try:
+        if content_types in ("answers", "all"):
+            answers_dir = str(base_dir / "answers")
+            info(f"\nFetching answers list for {user_name}...")
+            answer_items = fetch_member_answers(url_token, max_items=max_items, since=since)
+            state.bootstrap("answers", answers_dir)
+            pending = (
+                answer_items
+                if force
+                else [
+                    item
+                    for item in answer_items
+                    if not state.is_fresh("answers", str(item.get("id", "")), item.get("updated_time"))
+                ]
+            )
+            skipped["answers"] = len(answer_items) - len(pending)
+            detail = f"answers ({len(pending)} pending, {skipped['answers']} skipped)."
+            echo(f"  {f_label('Found')} {f_num(len(answer_items))} {f_dim(detail)}")
 
-    if content_types in ("pins", "all"):
-        pins_dir = str(base_dir / "pins")
-        info(f"\nFetching pins list for {user_name}...")
-        pin_items = fetch_member_pins(url_token, max_items=max_items)
-        echo(f"  {f_label('Found')} {f_num(len(pin_items))} {f_dim('pins. Downloading full content...')}")
+            def answer_task(index: int, item: dict) -> dict:
+                wait(delay)
+                try:
+                    meta, md = scrape_answer_page(item["url"])
+                    save_meta = {
+                        "title": meta.get("title", "untitled"),
+                        "author": meta.get("author", "unknown"),
+                        "created": meta.get("created", "unknown"),
+                    }
+                    filepath = save_article(item["url"], save_meta, md, answers_dir, with_media=with_media)
+                    with _output_lock:
+                        echo(
+                            f"  {item_index(index, len(pending))} {save_meta['title'][:50]}"
+                            f" -> {f_path(os.path.basename(filepath))}"
+                        )
+                    return {
+                        "status": "ok",
+                        "kind": "answers",
+                        "id": str(item.get("id", "")),
+                        "url": item["url"],
+                        "updated_time": item.get("updated_time"),
+                        "filepath": filepath,
+                    }
+                except Exception as e:
+                    with _output_lock:
+                        error(f"  {item_index(index, len(pending))} Error: {e}")
+                    return {"status": "error", "kind": "answers", "url": item.get("url", ""), "error": str(e)}
 
-        for i, item in enumerate(pin_items, 1):
-            try:
-                meta, md = scrape_pin(item["url"])
-                author = meta.get("author", {})
-                author_name = author.get("name", "unknown") if isinstance(author, dict) else str(author)
-                save_meta = {
-                    "author": author_name,
-                    "created": (meta.get("created_time", "unknown") or "unknown")[:10],
-                    "pin_id": str(meta.get("id", "")),
-                }
-                filepath = save_pin(item["url"], save_meta, md, pins_dir, with_media=with_media)
-                preview = (meta.get("excerpt", "") or "")[:30]
-                echo(f"  {item_index(i, len(pin_items))} {preview} -> {f_path(os.path.basename(filepath))}")
-                downloaded["pins"] += 1
-            except Exception as e:
-                failed.append({"url": item.get("url", ""), "error": str(e)})
-                error(f"  {item_index(i, len(pin_items))} Error: {e}")
-            wait(delay)
+            _run_items(pending, concurrency, answer_task, _handle)
+
+        if content_types in ("articles", "all"):
+            articles_dir = str(base_dir / "articles")
+            info(f"\nFetching articles list for {user_name}...")
+            article_items = fetch_member_articles(url_token, max_items=max_items, since=since)
+            state.bootstrap("articles", articles_dir)
+            pending = (
+                article_items
+                if force
+                else [
+                    item
+                    for item in article_items
+                    if not state.is_fresh("articles", str(item.get("id", "")), item.get("updated_time"))
+                ]
+            )
+            skipped["articles"] = len(article_items) - len(pending)
+            detail = f"articles ({len(pending)} pending, {skipped['articles']} skipped)."
+            echo(f"  {f_label('Found')} {f_num(len(article_items))} {f_dim(detail)}")
+
+            def article_task(index: int, item: dict) -> dict:
+                wait(delay)
+                try:
+                    meta, md = scrape_article(item["url"])
+                    author = meta.get("author", {})
+                    author_name = author.get("name", "unknown") if isinstance(author, dict) else str(author)
+                    save_meta = {
+                        "title": meta.get("title", "untitled"),
+                        "author": author_name,
+                        "created": (meta.get("created_time", "unknown") or "unknown")[:10],
+                    }
+                    filepath = save_article(item["url"], save_meta, md, articles_dir, with_media=with_media)
+                    with _output_lock:
+                        echo(
+                            f"  {item_index(index, len(pending))} {save_meta['title'][:50]}"
+                            f" -> {f_path(os.path.basename(filepath))}"
+                        )
+                    return {
+                        "status": "ok",
+                        "kind": "articles",
+                        "id": str(item.get("id", "")),
+                        "url": item["url"],
+                        "updated_time": item.get("updated_time"),
+                        "filepath": filepath,
+                    }
+                except Exception as e:
+                    with _output_lock:
+                        error(f"  {item_index(index, len(pending))} Error: {e}")
+                    return {"status": "error", "kind": "articles", "url": item.get("url", ""), "error": str(e)}
+
+            _run_items(pending, concurrency, article_task, _handle)
+
+        if content_types in ("pins", "all"):
+            pins_dir = str(base_dir / "pins")
+            info(f"\nFetching pins list for {user_name}...")
+            pin_items = fetch_member_pins(url_token, max_items=max_items, since=since)
+            state.bootstrap("pins", pins_dir)
+            pending = (
+                pin_items
+                if force
+                else [
+                    item
+                    for item in pin_items
+                    if not state.is_fresh("pins", str(item.get("id", "")), item.get("updated_time"))
+                ]
+            )
+            skipped["pins"] = len(pin_items) - len(pending)
+            detail = f"pins ({len(pending)} pending, {skipped['pins']} skipped)."
+            echo(f"  {f_label('Found')} {f_num(len(pin_items))} {f_dim(detail)}")
+
+            def pin_task(index: int, item: dict) -> dict:
+                wait(delay)
+                try:
+                    meta, md = scrape_pin(item["url"])
+                    author = meta.get("author", {})
+                    author_name = author.get("name", "unknown") if isinstance(author, dict) else str(author)
+                    save_meta = {
+                        "author": author_name,
+                        "created": (meta.get("created_time", "unknown") or "unknown")[:10],
+                        "pin_id": str(meta.get("id", "")),
+                    }
+                    filepath = save_pin(item["url"], save_meta, md, pins_dir, with_media=with_media)
+                    preview = (meta.get("excerpt", "") or "")[:30]
+                    with _output_lock:
+                        echo(f"  {item_index(index, len(pending))} {preview} -> {f_path(os.path.basename(filepath))}")
+                    return {
+                        "status": "ok",
+                        "kind": "pins",
+                        "id": str(item.get("id", "")),
+                        "url": item["url"],
+                        "updated_time": item.get("updated_time"),
+                        "filepath": filepath,
+                    }
+                except Exception as e:
+                    with _output_lock:
+                        error(f"  {item_index(index, len(pending))} Error: {e}")
+                    return {"status": "error", "kind": "pins", "url": item.get("url", ""), "error": str(e)}
+
+            _run_items(pending, concurrency, pin_task, _handle)
+    finally:
+        state.save()
 
     if output_json:
         print_json(
             {
                 "downloaded": downloaded,
+                "skipped": skipped,
+                "concurrency": concurrency,
                 "base_dir": str(base_dir),
                 "user_name": user_name,
                 "url_token": url_token,
@@ -437,6 +694,7 @@ def download_user(
     echo(f"  {f_label('Answers:')}  {f_num(downloaded['answers'])}")
     echo(f"  {f_label('Articles:')} {f_num(downloaded['articles'])}")
     echo(f"  {f_label('Pins:')}     {f_num(downloaded['pins'])}")
+    echo(f"  {f_label('Skipped:')}  {f_num(sum(skipped.values()))}")
     echo(f"  {f_label('Failed:')}   {f_num(len(failed))}")
     echo(f"  {f_label('Output:')}   {f_path(str(base_dir))}")
     if failed and not any(downloaded.values()):
