@@ -28,14 +28,50 @@ from lxml import html as lxml_html
 
 from zhihu_cli.content.handlers import get_user_agent
 from zhihu_cli.content.handlers.cache_manager import cache_manager
+from zhihu_cli.content.handlers.captcha import detect_captcha
 from zhihu_cli.content.handlers.captcha_gate import captcha_gate
 from zhihu_cli.content.handlers.challenges import ChallengeContext, run_challenges
 from zhihu_cli.content.handlers.cookie_utils import seed_cookie_jar
+from zhihu_cli.content.handlers.risk_control import ZhihuGateError
 from zhihu_cli.content.utils import rate_limit
 from zhihu_cli.content.utils.zse import ZSE93
 
 if TYPE_CHECKING:
     from collections.abc import Iterable
+
+
+def _api_refusal_gate(response: Any, url: str) -> ZhihuGateError | None:
+    """Return a gate error when *response* is an API-level refusal.
+
+    Zhihu answers some anonymous requests with ``403`` and a JSON envelope of the
+    form ``{"error": {"code": ..., "message": ...}}``.  The refusal is identified
+    by its *shape*, not by a list of codes: any 403 JSON error envelope that the
+    captcha module does not claim counts.  Deferring that one distinction keeps
+    the captcha/login relay intact (``40352`` / ``need_login``) while new
+    refusal codes — ``10003`` today — need no list update.
+
+    :param response: Response returned by the underlying ``curl_cffi`` session.
+    :param url: Requested URL, reported in the gate message.
+    :returns: A populated :class:`ZhihuGateError`, or ``None`` when the response
+        is not a 403 JSON error envelope, or is a captcha / login gate.
+    """
+    if getattr(response, "status_code", None) != 403:
+        return None
+    headers = getattr(response, "headers", None) or {}
+    content_type = str(headers.get("content-type") or headers.get("Content-Type") or "")
+    if "json" not in content_type.lower():
+        return None
+    if detect_captcha(response) is not None:
+        return None
+    try:
+        payload = response.json()
+    except Exception:  # noqa: BLE001 - empty or non-JSON bodies are expected
+        return None
+    error = payload.get("error") if isinstance(payload, dict) else None
+    if not isinstance(error, dict):
+        return None
+    message = str(error.get("message") or "").strip() or None
+    return ZhihuGateError("risk_control", url, detail=message)
 
 
 def get_browser(ua: str) -> _requests.BrowserTypeLiteral:
@@ -200,7 +236,10 @@ class ZhihuSession(_requests.Session):
 
         Post-response anti-crawl handling is delegated to the registry in
         :mod:`zhihu_cli.content.handlers.challenges`: each registered handler
-        may solve the challenge and have the request re-sent once.
+        may solve the challenge and have the request re-sent once.  API-level
+        refusals (403 JSON error envelopes the captcha module does not claim)
+        are then raised as :class:`ZhihuGateError` here, so a direct
+        ``session.get`` cannot leak a bare ``HTTPError``.
 
         :param method: HTTP method.
         :param url: Full request URL.
@@ -208,6 +247,7 @@ class ZhihuSession(_requests.Session):
             :meth:`curl_cffi.requests.Session.request`, plus
             ``skip_app_headers`` (suppress ``x-app-version``/``x-app-za``).
         :returns: The response, retried when a challenge was resolved.
+        :raises ZhihuGateError: When the final response is a known API refusal.
         """
         # Order matters: the captcha gate can park many threads, so waiting
         # there first keeps the rate limiter's slots from being consumed by
@@ -270,7 +310,11 @@ class ZhihuSession(_requests.Session):
                     epoch_at_send=epoch_at_send,
                     retry=self._retry_challenge,
                 )
-                return run_challenges(resp, ctx, skip=self._disabled_challenges)
+                resp = run_challenges(resp, ctx, skip=self._disabled_challenges)
+                gate = _api_refusal_gate(resp, url)
+                if gate is not None:
+                    raise gate
+                return resp
             finally:
                 if skip_app:
                     if saved_version is not None:

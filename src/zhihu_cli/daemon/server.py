@@ -49,6 +49,7 @@ from zhihu_cli.content.handlers._session_core import (
 )
 from zhihu_cli.content.handlers.cache_manager import cache_manager
 from zhihu_cli.content.handlers.captcha import _is_captcha_endpoint, detect_captcha
+from zhihu_cli.content.handlers.risk_control import ZhihuGateError
 from zhihu_cli.content.utils import rate_limit
 from zhihu_cli.daemon import _platform, transport
 from zhihu_cli.daemon.protocol import (
@@ -619,6 +620,17 @@ class DaemonServer:
         # silently kill the client socket (client would hang until timeout).
         try:
             resp, cookies = await loop.run_in_executor(None, self._do_request, method, url, kwargs, profile)
+        except ZhihuGateError as e:
+            # Relay the gate as structured data so the client can raise the same
+            # ZhihuGateError instead of an opaque DaemonRequestError.  The
+            # session raises these for API refusal codes before the captcha
+            # check below runs, which is correct: they are not captchas.
+            return build_error(
+                msg_id,
+                "ZhihuGateError",
+                str(e),
+                error_data={"gate": e.gate, "url": e.url, "detail": e.detail},
+            )
         except Exception as e:
             _log(f"HTTP request failed: {method} {url}: {e}", exc=True)
             return build_error(msg_id, type(e).__name__, str(e))

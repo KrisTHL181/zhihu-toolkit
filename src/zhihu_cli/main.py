@@ -29,6 +29,25 @@ from zhihu_cli.content.handlers.risk_control import ZhihuGateError
 from zhihu_cli.extensions import discover_extensions
 
 
+def _as_http_error(exc: BaseException) -> BaseException | None:
+    """Return *exc* when it is a ``curl_cffi`` HTTP error, else ``None``.
+
+    ``curl_cffi`` is imported lazily: command modules already import it on the
+    request path, but ``zhihu --help`` and shell completion must not pay for
+    it.  An exception is the only time this helper runs, so the import cost is
+    irrelevant here.
+
+    :param exc: The exception raised by a command.
+    :returns: *exc* when it is a :class:`curl_cffi.requests.exceptions.HTTPError`,
+        otherwise ``None`` so the caller can re-raise it unchanged.
+    """
+    try:
+        from curl_cffi.requests.exceptions import HTTPError
+    except Exception:  # noqa: BLE001 - curl_cffi is a hard dependency in practice
+        return None
+    return exc if isinstance(exc, HTTPError) else None
+
+
 class _ZhihuGroup(click.Group):
     """Click group that renders anonymous-access gates as normal CLI errors.
 
@@ -36,6 +55,10 @@ class _ZhihuGroup(click.Group):
     when Zhihu answers with the ``__zse_ck`` challenge, the account-verification
     page, or a sign-in redirect.  Without this translation Click would print a
     traceback; the gate message already says how to authenticate.
+
+    Uncaught ``curl_cffi`` HTTP errors (a 403 that no gate handler recognised)
+    are rendered the same way: one ``Error:`` line with the server's wording,
+    which is already folded into the exception by ``fetch_json``.
     """
 
     def invoke(self, ctx: click.Context) -> object:
@@ -50,6 +73,11 @@ class _ZhihuGroup(click.Group):
             return super().invoke(ctx)
         except ZhihuGateError as exc:
             raise click.ClickException(str(exc)) from None
+        except Exception as exc:  # noqa: BLE001 - re-raised unless it is an HTTP error
+            http_error = _as_http_error(exc)
+            if http_error is None:
+                raise
+            raise click.ClickException(str(http_error).strip()) from None
 
 
 @click.group(cls=_ZhihuGroup)

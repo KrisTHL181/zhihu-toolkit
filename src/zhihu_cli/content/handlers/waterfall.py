@@ -8,6 +8,7 @@ from urllib.parse import parse_qsl, urlencode, urlparse, urlunparse
 
 from zhihu_cli.content.handlers.cache_manager import cache_manager
 from zhihu_cli.content.handlers.requests import session
+from zhihu_cli.content.handlers.risk_control import detect_gate
 from zhihu_cli.content.utils.wait import wait
 
 PAGE_SIZE: int = 20
@@ -154,6 +155,14 @@ def _paginate(
             break
 
         resp = session.get(current_url, skip_app_headers=skip_app_headers)
+        # Paginated walkers used to surface gates as bare HTTPErrors (and thus
+        # tracebacks).  ``ZhihuSession`` handles API refusal codes itself; this
+        # catches the response-shaped gates (``__zse_ck`` HTML, ``/unhuman``
+        # redirects, risk-control JSON) for the daemon path and any handler
+        # layered on top of the stream.
+        gate = detect_gate(resp, current_url)
+        if gate is not None:
+            raise gate
         resp.raise_for_status()
         data = resp.json()
         pages_fetched += 1

@@ -36,6 +36,7 @@ import threading
 from typing import TYPE_CHECKING, Any
 
 from zhihu_cli.content.handlers.captcha_gate import captcha_gate, resolve_captcha
+from zhihu_cli.content.handlers.risk_control import ZhihuGateError
 from zhihu_cli.content.utils import rate_limit
 from zhihu_cli.daemon import transport
 from zhihu_cli.daemon.protocol import (
@@ -715,6 +716,16 @@ class DaemonProxySession:
         if resp_type == MSG_ERROR:
             error_type = resp_data.get("error_type", "DaemonRequestError")
             message = resp_data.get("message", "Unknown daemon error")
+            if error_type == "ZhihuGateError":
+                # The server relayed a gate the shared session raised; restore
+                # the typed error so the CLI's top-level handler can render it
+                # like any other ZhihuGateError.
+                data = resp_data.get("error_data") or {}
+                raise ZhihuGateError(
+                    str(data.get("gate") or "risk_control"),
+                    str(data.get("url") or url),
+                    detail=data.get("detail"),
+                )
             raise DaemonRequestError(error_type, message)
 
         raise DaemonProtocolError(f"Unexpected response type: {resp_type}")
