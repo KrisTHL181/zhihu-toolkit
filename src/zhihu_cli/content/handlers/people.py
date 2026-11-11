@@ -164,7 +164,8 @@ def _until_since(items: Iterable[dict[str, Any]], since: str | None) -> Iterable
 
 #: ``include`` fields for the lightweight answer listing (no body).
 _MEMBER_ANSWER_INCLUDE = (
-    "data%5B%2A%5D.excerpt%2Cdata%5B%2A%5D.voteup_count%2Cdata%5B%2A%5D.comment_count%2Cdata%5B%2A%5D.is_copyable"
+    "data%5B%2A%5D.excerpt%2Cdata%5B%2A%5D.voteup_count%2Cdata%5B%2A%5D.comment_count"
+    "%2Cdata%5B%2A%5D.is_copyable%2Cdata%5B%2A%5D.question"
 )
 
 #: ``include`` fields for ``include_content=True``.  The member-answers
@@ -218,6 +219,10 @@ def _parse_member_answer(
             "voteup_count": item.get("voteup_count", 0),
             "comment_count": item.get("comment_count", 0),
             "is_copyable": item.get("is_copyable", True),
+            # The nested question object carries its creation time for free;
+            # without it an author-first discovery walk has to guess from the
+            # question ID (and cannot for pre-snowflake IDs).
+            "question_created": int(question.get("created", 0) or 0),
         }
 
     author = item.get("author") or {}
