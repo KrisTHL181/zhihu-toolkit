@@ -18,8 +18,8 @@ and inbox.
 
 **Save things for later.** Download any post as clean Markdown — YAML frontmatter,
 rendered footnotes, LaTeX handled — into `~/.zhihu-cli/downloads/`, organized by type.
-Batch-scrape a user's content lists or your own activity history to JSON, and reshape the
-exports with the universal converter.
+Batch-scrape a user's content lists or your own activity history to JSON, then feed those
+exports straight into the `download batch-*` commands.
 
 **Write and manage.** Publish and edit answers, articles, and pins written in Markdown
 (the Markdown-to-HTML step goes through Zhihu's own renderer). Manage drafts, collections,
@@ -84,8 +84,8 @@ plugin_manager   action=remove_bundle   target=@kristhl181/dsh-plugin-zhihu
   `zhihu_run` to execute any command. That is deliberate: a command added to the CLI shows
   up here immediately, with no change to this plugin.
 - **Read commands take `--json`.** The agent is instructed to use it, so results come back
-  parseable instead of as styled terminal text. `publish`, `config`, and `convert` print
-  plain text and are passed through as-is.
+  parseable instead of as styled terminal text. `publish` and `config` print plain text
+  and are passed through as-is.
 - **No deadline is imposed here.** A command runs until it finishes; how long to wait
   before giving up is the MCP client's decision, not the server's. Nothing is killed
   mid-run.

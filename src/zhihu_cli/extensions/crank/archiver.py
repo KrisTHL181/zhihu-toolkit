@@ -20,7 +20,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
-from zhihu_cli.content.assets import convert_items
+from zhihu_cli.content.assets import asset_from_item
 from zhihu_cli.content.download_contents import sanitize_filename, save_article
 from zhihu_cli.content.handlers.article import scrape_article
 from zhihu_cli.content.handlers.waterfall import stream_handler
@@ -373,7 +373,7 @@ def run_archiver(
     author_name = first.get("author", {}).get("name", user_token)
 
     # 2. Convert to unified format
-    assets = convert_items(raw_articles, forced_type="article")
+    assets = [asset for item in raw_articles if (asset := asset_from_item(item, "article")) is not None]
     print(f"Converted to {len(assets)} unified assets.")
 
     # 3. Download articles to temp dir via scrape_article (js-initialData-based, no cURL headers needed)

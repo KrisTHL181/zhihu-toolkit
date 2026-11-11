@@ -80,7 +80,7 @@ Always add ``--json`` when the subcommand supports it — most read commands
 do, and the output is then directly parseable. Example:
 ``zhihu_run('search question "rust 异步" --json')``.
 
-Commands that print styled text instead of JSON (publish, config, convert)
+Commands that print styled text instead of JSON (publish, config)
 are still usable; their output is returned as-is.
 
 :param args: the command line to run, without the leading ``zhihu``. Quote

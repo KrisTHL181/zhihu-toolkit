@@ -22,6 +22,7 @@ from zhihu_cli.content.handlers.cache_manager import cache_manager
 from zhihu_cli.output import (
     echo,
     error,
+    f_dim,
     f_label,
     f_num,
     f_path,
@@ -198,6 +199,86 @@ def register_tools(main_group):
                 warning(f"Run overran its interval — skipping {skipped} interval(s)")
             time.sleep(deadline - now)
             deadline += period_seconds
+
+    @tools.command("markdown")
+    @click.argument("path", type=click.Path(exists=True))
+    @click.option(
+        "--override",
+        is_flag=True,
+        default=False,
+        help="Delete original HTML file(s) after conversion.",
+    )
+    def tools_markdown(path: str, override: bool) -> None:
+        """Convert raw HTML files to Markdown.
+
+        PATH may be a single .html file or a directory. When PATH is a
+        directory, all .html / .htm files under it are converted recursively.
+
+        By default the generated .md file sits alongside the original HTML.
+        Use --override to delete the original HTML after conversion.
+        """
+        from zhihu_cli.content.utils.html2markdown import PageToMarkdown
+
+        input_path = Path(path)
+        converter = PageToMarkdown()
+
+        # ── collect files ─────────────────────────────────────────────────
+        if input_path.is_file():
+            html_files = [input_path]
+        else:
+            html_files = sorted(
+                p for p in input_path.rglob("*") if p.is_file() and p.suffix.lower() in (".html", ".htm")
+            )
+
+        if not html_files:
+            error(f"No HTML files found in {f_path(path)}")
+            raise SystemExit(1)
+
+        # ── convert each file ─────────────────────────────────────────────
+        converted = 0
+        skipped = 0
+        for html_file in html_files:
+            if html_file.suffix.lower() not in (".html", ".htm"):
+                skipped += 1
+                warning(f"Skipping non-HTML file: {f_path(str(html_file))}")
+                continue
+
+            md_path = html_file.with_suffix(".md")
+
+            # Read HTML
+            try:
+                html_content = html_file.read_text(encoding="utf-8")
+            except (OSError, UnicodeDecodeError) as exc:
+                warning(f"Cannot read {f_path(str(html_file))}: {exc}")
+                skipped += 1
+                continue
+
+            if not html_content.strip():
+                warning(f"Skipping empty file: {f_path(str(html_file))}")
+                skipped += 1
+                continue
+
+            # Convert
+            markdown = converter.convert(html_content)
+
+            # Write Markdown
+            md_path.write_text(markdown, encoding="utf-8")
+            converted += 1
+
+            # Delete original if --override
+            if override:
+                html_file.unlink()
+                success(f"{f_path(str(html_file))} {f_dim('→')} {f_path(str(md_path))}  (deleted)")
+            else:
+                success(f"{f_path(str(html_file))} {f_dim('→')} {f_path(str(md_path))}")
+
+        # ── summary ──────────────────────────────────────────────────────
+        msg = f"Converted {f_num(converted)} file(s)"
+        if skipped:
+            msg += f", {f_num(skipped)} skipped"
+        if override:
+            msg += f" {f_dim('(--override)')}"
+        success(msg)
 
     @tools.command("request")
     @click.argument("url", type=str)

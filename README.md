@@ -75,7 +75,7 @@ Vote, thank, follow, block, and comment — full social interaction without the 
 
 ### 🕸️ Scrape & Export
 
-Batch-export your creations, activity history, answers, and articles as structured JSON. Use the universal converter to merge and normalize across formats for your own data pipeline.
+Batch-export your creations, activity history, answers, and articles as structured JSON. Scrape exports are plain asset lists, so you can feed them straight into the `download batch-*` commands or your own data pipeline.
 
 ### 📊 Analyze
 

@@ -10,27 +10,9 @@ import pytest
 from zhihu_cli.content.assets import (
     asset_from_item,
     asset_url,
-    convert_files,
-    convert_items,
-    detect_format,
     load_assets,
     write_assets,
 )
-
-
-def test_detect_format_recognises_all_shapes() -> None:
-    """Every supported source shape is detected from its characteristic keys."""
-    assert detect_format([{"id": "1", "question": {"title": "Q"}}]) == "answers"
-    assert detect_format([{"verb": "create", "target_type": "answer", "target_id": "1"}]) == "activities"
-    assert detect_format([{"type": "answer", "data": {"id": "1"}}]) == "creations"
-    assert detect_format([{"type": "article", "id": "1"}]) == "typed"
-    assert detect_format([{"id": "1", "title": "T"}]) == "generic_title"
-
-
-def test_detect_format_returns_unknown_and_skips_non_dicts() -> None:
-    """Unrecognisable items (including leading non-dicts) fall through to unknown."""
-    assert detect_format([None, "junk", {"foo": "bar"}]) == "unknown"
-    assert detect_format([]) == "unknown"
 
 
 def test_asset_from_creation() -> None:
@@ -59,51 +41,16 @@ def test_asset_from_creation_rejects_unsupported_items(item: dict) -> None:
     assert asset_from_item(item, "creations") is None
 
 
-def test_asset_from_activity_creation() -> None:
-    """A creation activity becomes an asset using its target type and id."""
-    item = {"verb": "create", "target_type": "pin", "target_id": 7, "title": "A pin"}
+def test_asset_from_article() -> None:
+    """A raw article item becomes an article asset keyed by its id."""
+    item = {"id": 1, "title": "Raw article"}
 
-    assert asset_from_item(item, "activities") == {"id": "7", "type": "pin", "title": "A pin"}
-
-
-def test_asset_from_activity_skips_non_creation() -> None:
-    """Votes, follows and other non-creation activities are skipped."""
-    item = {"verb": "vote", "target_type": "answer", "target_id": "7", "is_creation": False}
-
-    assert asset_from_item(item, "activities") is None
+    assert asset_from_item(item, "article") == {"id": "1", "type": "article", "title": "Raw article"}
 
 
-def test_convert_items_answers_tolerates_bad_questions() -> None:
-    """Null, missing, non-dict and null-title questions all become answers."""
-    items = [
-        {"id": "1", "question": None},
-        {"id": "2"},
-        {"id": "3", "question": "deleted"},
-        {"id": "4", "question": {"title": None}},
-        {"id": "5", "question": {"title": "First?"}},
-    ]
-
-    result = convert_items(items, source="answers")
-
-    assert [asset["type"] for asset in result] == ["answer"] * 5
-    assert [asset["title"] for asset in result] == [
-        "untitled answer",
-        "untitled answer",
-        "untitled answer",
-        "untitled answer",
-        "First?",
-    ]
-
-
-def test_convert_items_answers_skips_null_id() -> None:
-    """Answers whose id is ``None`` or empty are dropped, valid items are kept."""
-    items = [
-        {"id": None, "question": {"title": "dropped"}},
-        {"id": "", "question": {"title": "dropped"}},
-        {"id": "3", "question": {"title": "kept"}},
-    ]
-
-    assert convert_items(items, source="answers") == [{"id": "3", "type": "answer", "title": "kept"}]
+def test_asset_from_article_rejects_missing_id() -> None:
+    """An article item without an id cannot become an asset."""
+    assert asset_from_item({"title": "no id"}, "article") is None
 
 
 def test_load_assets_skips_malformed_entries(tmp_path: Path) -> None:
@@ -143,18 +90,6 @@ def test_write_assets_creates_parents_and_round_trips(tmp_path: Path) -> None:
     assert target.exists()
     assert json.loads(target.read_text(encoding="utf-8")) == assets
     assert load_assets(target) == assets
-
-
-def test_convert_files_detects_format_per_file(tmp_path: Path) -> None:
-    """Mixed exports each use their own detected format, not the first file's."""
-    answers = tmp_path / "answers.json"
-    answers.write_text(json.dumps([{"id": "1", "question": {"title": "Q"}}]), encoding="utf-8")
-    generic = tmp_path / "generic.json"
-    generic.write_text(json.dumps([{"id": "2", "title": "Article"}]), encoding="utf-8")
-
-    result = convert_files([answers, generic])
-
-    assert {(asset["type"], asset["id"]) for asset in result} == {("answer", "1"), ("article", "2")}
 
 
 @pytest.mark.parametrize(

@@ -521,7 +521,7 @@ def download_video(url: str, output_dir: str, output_json: bool, no_download_vid
     "-i",
     "input_file",
     default=str(get_data_dir() / "exports" / "all_assets_list.json"),
-    help="Assets JSON file",
+    help="Asset list JSON (all_assets_list.json or a scrape export)",
 )
 @click.option(
     "--output-dir",
@@ -552,7 +552,7 @@ def download_batch_answers(
     with_media: bool,
     output_json: bool,
 ) -> None:
-    """Batch download all answers listed in an assets JSON file."""
+    """Batch download all answers listed in an asset/scrape JSON file."""
     set_json_mode(output_json)
     if not os.path.exists(input_file):
         error(f"file not found: {input_file}")
@@ -602,7 +602,7 @@ def download_batch_answers(
     "-i",
     "input_file",
     default=str(get_data_dir() / "exports" / "all_assets_list.json"),
-    help="Assets JSON file",
+    help="Asset list JSON (all_assets_list.json or a scrape export)",
 )
 @click.option(
     "--output-dir",
@@ -633,7 +633,7 @@ def download_batch_articles(
     with_media: bool,
     output_json: bool,
 ) -> None:
-    """Batch download all articles listed in an assets JSON file."""
+    """Batch download all articles listed in an asset/scrape JSON file."""
     set_json_mode(output_json)
     if not os.path.exists(input_file):
         error(f"file not found: {input_file}")
@@ -683,7 +683,7 @@ def download_batch_articles(
     "-i",
     "input_file",
     default=str(get_data_dir() / "exports" / "all_assets_list.json"),
-    help="Assets JSON file",
+    help="Asset list JSON (all_assets_list.json or a scrape export)",
 )
 @click.option(
     "--output-dir",
@@ -712,7 +712,7 @@ def download_batch_pins(
     with_media: bool,
     output_json: bool,
 ) -> None:
-    """Batch download all pins listed in an assets JSON file."""
+    """Batch download all pins listed in an asset/scrape JSON file."""
     set_json_mode(output_json)
     if not os.path.exists(input_file):
         error(f"file not found: {input_file}")
