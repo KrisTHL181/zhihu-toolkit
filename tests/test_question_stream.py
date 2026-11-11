@@ -55,7 +55,10 @@ def test_order_and_question_fields(monkeypatch: pytest.MonkeyPatch) -> None:
     url = unquote(captured["url"])
     assert "order=created" in url
     assert "question.detail" in url
-    assert captured["kwargs"] == {"limit": 5, "max_items": None}
+    assert captured["kwargs"]["limit"] == 5
+    assert captured["kwargs"]["max_items"] is None
+    assert captured["kwargs"]["max_pages"] is None
+    assert captured["kwargs"]["delay"] == 1.0
     answer = result[0]
     assert answer["content"] == "<p>body</p>"
     assert answer["question_id"] == "42"
@@ -120,7 +123,8 @@ def test_scrape_answers_remains_a_positional_compatible_alias(monkeypatch: pytes
 
     question.scrape_answers({"id": 42}, True, 3, 10, False)
 
-    assert captured["kwargs"] == {"limit": 3, "max_items": 10}
+    assert captured["kwargs"]["limit"] == 3
+    assert captured["kwargs"]["max_items"] == 10
     assert captured["items"][0]["content"] == "<p>body</p>"
 
 

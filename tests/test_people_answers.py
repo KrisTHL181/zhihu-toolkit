@@ -53,7 +53,9 @@ def test_stream_full_content_requests_body_and_vote_order(monkeypatch: pytest.Mo
 
     assert "sort_by=voteups" in captured["url"]
     assert "data%5B%2A%5D.content" in captured["url"]
-    assert captured["kwargs"] == {"max_items": None}
+    assert captured["kwargs"]["max_items"] is None
+    assert captured["kwargs"]["max_pages"] is None
+    assert captured["kwargs"]["delay"] == 1.0
     assert result[0]["content"] == "<p>hello</p>"
     assert result[0]["author"] == "Alice"
     assert result[0]["author_token"] == "alice"
@@ -64,6 +66,17 @@ def test_stream_full_content_requests_body_and_vote_order(monkeypatch: pytest.Mo
     assert result[0]["created_time"] == 1_700_000_000
     assert result[0]["question_created"] == 1_600_000_000
     assert result[0]["truncated"] is False
+
+
+def test_stream_full_content_keeps_unknown_favorite_as_none(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The author path omits favlists_count; ``None`` means "unknown", not zero."""
+    item = _item()
+    del item["favlists_count"]
+    _patch_stream(monkeypatch, [item])
+
+    result = list(people.stream_member_answers("alice", include_content=True, raw=True))
+
+    assert result[0]["favorite"] is None
 
 
 def test_stream_full_content_converts_to_markdown_by_default(monkeypatch: pytest.MonkeyPatch) -> None:

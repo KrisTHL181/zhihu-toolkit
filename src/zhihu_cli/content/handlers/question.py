@@ -144,6 +144,8 @@ def stream_answers(
     order: str = "default",
     include: str | None = None,
     include_question: bool = False,
+    max_pages: int | None = None,
+    delay: float = 1.0,
 ) -> PageStream:
     """Stream answers for a question, one dict per answer.
 
@@ -169,6 +171,11 @@ def stream_answers(
         ``question_id``, ``question_title``, ``question_created``,
         ``question_description``, ``author_token``, ``thanks`` and
         ``truncated``.
+    :param max_pages: optional cap on the number of API pages fetched.
+    :param delay: inter-page delay passed to
+        :func:`~zhihu_cli.content.handlers.waterfall.stream_handler`.  It is
+        zeroed while a profile is logged in; use
+        :func:`zhihu_cli.set_rate_limit` for real pacing.
     :raises ValueError: when ``order`` is empty.
     """
     if not order:
@@ -231,7 +238,7 @@ def stream_answers(
                 )
             yield answer
 
-    return stream_handler(url, parse_ans, limit=limit, max_items=max_items)
+    return stream_handler(url, parse_ans, limit=limit, max_items=max_items, max_pages=max_pages, delay=delay)
 
 
 def scrape_answers(
@@ -244,6 +251,8 @@ def scrape_answers(
     order: str = "default",
     include: str | None = None,
     include_question: bool = False,
+    max_pages: int | None = None,
+    delay: float = 1.0,
 ) -> Iterable[dict[str, Any]]:
     """Yield answers for a question, one dict per answer.
 
@@ -259,6 +268,8 @@ def scrape_answers(
         order=order,
         include=include,
         include_question=include_question,
+        max_pages=max_pages,
+        delay=delay,
     )
 
 

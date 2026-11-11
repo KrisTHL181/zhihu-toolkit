@@ -235,7 +235,10 @@ def _parse_member_answer(
         "author_token": author.get("url_token", ""),
         "vote": item.get("voteup_count", 0),
         "comment": item.get("comment_count", 0),
-        "favorite": item.get("favlists_count", 0),
+        # The member-answers endpoint does not return favlists_count; keep the
+        # distinction between "unknown" (None) and "zero" so a caller filtering
+        # on favorites does not silently drop every answer from this source.
+        "favorite": item.get("favlists_count"),
         "thanks": item.get("thanks_count", 0),
         "created_time": int(item.get("created_time", 0) or 0),
         "updated_time": int(item.get("updated_time", 0) or 0),
@@ -264,6 +267,8 @@ def stream_member_answers(
     include_content: bool = False,
     sort_by: str = "created",
     raw: bool = False,
+    max_pages: int | None = None,
+    delay: float = 1.0,
 ) -> Iterator[dict[str, Any]]:
     """Stream a member's answers, one dict per answer.
 
@@ -286,6 +291,11 @@ def stream_member_answers(
         rather than the newest.
     :param raw: Leave ``content`` as HTML instead of converting it to
         Markdown.  Ignored unless ``include_content`` is true.
+    :param max_pages: Optional cap on the number of API pages fetched.
+    :param delay: Inter-page delay passed to
+        :func:`~zhihu_cli.content.handlers.waterfall.stream_handler`.  Like
+        every handler delay, it is zeroed while a profile is logged in; use
+        :func:`zhihu_cli.set_rate_limit` for real pacing.
     :raises ValueError: for an unknown ``sort_by``, or for ``since`` combined
         with a non-``created`` order.
     """
@@ -299,7 +309,7 @@ def stream_member_answers(
     url = f"{MEMBER_API.format(token=url_token)}/answers?include={include}&offset=0&limit={limit}&sort_by={sort_by}"
     parser = partial(_parse_full_answer_list, raw=raw) if include_content else _parse_answer_list
 
-    stream = stream_handler(url, parser, max_items=max_items)
+    stream = stream_handler(url, parser, max_items=max_items, max_pages=max_pages, delay=delay)
     return _until_since(stream, since) if since else stream
 
 
@@ -312,6 +322,8 @@ def fetch_member_answers(
     include_content: bool = False,
     sort_by: str = "created",
     raw: bool = False,
+    max_pages: int | None = None,
+    delay: float = 1.0,
 ) -> list[dict[str, Any]]:
     """Fetch a member's answers list.
 
@@ -334,6 +346,8 @@ def fetch_member_answers(
             include_content=include_content,
             sort_by=sort_by,
             raw=raw,
+            max_pages=max_pages,
+            delay=delay,
         )
     )
 
