@@ -110,9 +110,11 @@ def test_stream_listing_shape_is_unchanged(monkeypatch: pytest.MonkeyPatch) -> N
         "comment_count",
         "is_copyable",
         "question_created",
+        "question_answer_count",
     }
     assert result[0]["created_time"] == fmt_time(1_700_000_000)
     assert result[0]["question_created"] == 1_600_000_000
+    assert result[0]["question_answer_count"] is None
 
 
 def test_fetch_member_answers_forwards_new_options(monkeypatch: pytest.MonkeyPatch) -> None:

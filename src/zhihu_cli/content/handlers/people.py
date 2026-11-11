@@ -223,6 +223,9 @@ def _parse_member_answer(
             # without it an author-first discovery walk has to guess from the
             # question ID (and cannot for pre-snowflake IDs).
             "question_created": int(question.get("created", 0) or 0),
+            # ``None`` when the nested question omits the count, so callers can
+            # distinguish "unknown" from a genuinely zero-answer question.
+            "question_answer_count": question.get("answer_count"),
         }
 
     author = item.get("author") or {}
