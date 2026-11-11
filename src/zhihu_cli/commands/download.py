@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import json
 import os
 import threading
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -12,6 +11,7 @@ from pathlib import Path
 import click
 
 from zhihu_cli.commands._helpers import _extract_url_token, _save_markdown
+from zhihu_cli.content.assets import asset_url, load_assets
 from zhihu_cli.content.download_contents import (
     ContentDownloader,
     download_media_files,
@@ -558,10 +558,8 @@ def download_batch_answers(
         error(f"file not found: {input_file}")
         raise SystemExit(1)
 
-    with open(input_file, encoding="utf-8") as f:
-        assets = json.load(f)
-
-    pairs = [(str(a["id"]), f"https://www.zhihu.com/answer/{a['id']}") for a in assets if a.get("type") == "answer"]
+    assets = load_assets(input_file)
+    pairs = [(a["id"], asset_url(a)) for a in assets if a["type"] == "answer"]
     if not pairs:
         info("No answers found in the assets file.")
         return
@@ -641,10 +639,8 @@ def download_batch_articles(
         error(f"file not found: {input_file}")
         raise SystemExit(1)
 
-    with open(input_file, encoding="utf-8") as f:
-        assets = json.load(f)
-
-    pairs = [(str(a["id"]), f"https://zhuanlan.zhihu.com/p/{a['id']}") for a in assets if a.get("type") == "article"]
+    assets = load_assets(input_file)
+    pairs = [(a["id"], asset_url(a)) for a in assets if a["type"] == "article"]
     if not pairs:
         info("No articles found in the assets file.")
         return
@@ -674,6 +670,94 @@ def download_batch_articles(
         results = dl.download_articles(
             urls, delay=delay, concurrency=concurrency, state=state, kind="articles", force=force
         )
+        if output_json:
+            print_json(results)
+            return
+    finally:
+        state.save()
+
+
+@download.command("batch-pins")
+@click.option(
+    "--input",
+    "-i",
+    "input_file",
+    default=str(get_data_dir() / "exports" / "all_assets_list.json"),
+    help="Assets JSON file",
+)
+@click.option(
+    "--output-dir",
+    "-o",
+    default=str(get_data_dir() / "downloads" / "pins"),
+    help="Output directory",
+)
+@click.option("--delay", "-d", type=float, default=1.0, help="Delay between requests (seconds)")
+@click.option(
+    "--concurrency",
+    "-j",
+    type=click.IntRange(1, 32),
+    default=4,
+    show_default=True,
+    help="Number of parallel downloads",
+)
+@click.option("--force", is_flag=True, default=False, help="Re-download items already recorded in the state file")
+@click.option("--with-media", is_flag=True, default=False, help="Download images/videos alongside Markdown")
+@click.option("--json", "output_json", is_flag=True, default=False, help="Output as JSON")
+def download_batch_pins(
+    input_file: str,
+    output_dir: str,
+    delay: float,
+    concurrency: int,
+    force: bool,
+    with_media: bool,
+    output_json: bool,
+) -> None:
+    """Batch download all pins listed in an assets JSON file."""
+    set_json_mode(output_json)
+    if not os.path.exists(input_file):
+        error(f"file not found: {input_file}")
+        raise SystemExit(1)
+
+    assets = load_assets(input_file)
+    items = [{"id": a["id"], "url": asset_url(a)} for a in assets if a["type"] == "pin"]
+    if not items:
+        info("No pins found in the assets file.")
+        return
+
+    state = DownloadState(output_dir)
+    state.load()
+    try:
+        state.bootstrap("pins", output_dir)
+        pending = _pending_items(items, "pins", state, force)
+        skipped = len(items) - len(pending)
+
+        extra = f" {f_dim(f'{len(pending)} pending, {skipped} skipped.')}" if skipped else ""
+        echo(f"  {f_label('Found')} {f_num(len(items))} {f_dim('pins.')}{extra}")
+        if not pending:
+            if output_json:
+                print_json([])
+            return
+
+        def pin_task(index: int, item: dict) -> dict:
+            wait(delay)
+            return _pin_item_task(index, len(pending), item, output_dir, with_media)
+
+        results: list[dict] = []
+
+        def handle(outcome: dict) -> None:
+            results.append(outcome)
+            if outcome.get("status") != "ok":
+                return
+            relpath = os.path.relpath(outcome["filepath"], output_dir).replace(os.sep, "/")
+            state.record(
+                "pins",
+                outcome["id"],
+                url=outcome["url"],
+                updated_time=outcome.get("updated_time"),
+                filepath=relpath,
+            )
+
+        _run_items(pending, concurrency, pin_task, handle)
         if output_json:
             print_json(results)
             return

@@ -14,6 +14,7 @@ import statistics
 import unicodedata
 from collections import defaultdict
 
+from zhihu_cli.content.assets import load_assets
 from zhihu_cli.creator_tools._format import fmt_num
 from zhihu_cli.creator_tools._io import load_json
 from zhihu_cli.output import (
@@ -50,20 +51,15 @@ def _load_asset_titles() -> dict[tuple[str, str], str]:
         when the asset list is missing or unreadable.
     """
     try:
-        raw = json.loads(ASSETS_FILE.read_text(encoding="utf-8"))
-    except (json.JSONDecodeError, OSError):
-        return {}
-    if not isinstance(raw, list):
+        assets = load_assets(ASSETS_FILE)
+    except (json.JSONDecodeError, OSError, ValueError):
         return {}
     titles: dict[tuple[str, str], str] = {}
-    for asset in raw:
-        if not isinstance(asset, dict):
-            continue
-        asset_id = asset.get("id")
+    for asset in assets:
         title = asset.get("title")
-        if asset_id is None or not title:
+        if not title:
             continue
-        titles[(str(asset.get("type", "")), str(asset_id))] = str(title)
+        titles[(asset["type"], asset["id"])] = str(title)
     return titles
 
 

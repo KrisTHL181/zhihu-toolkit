@@ -2,14 +2,13 @@
 
 from __future__ import annotations
 
-import json
 import os
 from pathlib import Path
 
 import click
 
+from zhihu_cli.content.assets import convert_files, write_assets
 from zhihu_cli.content.handlers import get_data_dir
-from zhihu_cli.content.universal_converter import convert_items, load_json
 from zhihu_cli.content.utils.html2markdown import PageToMarkdown
 from zhihu_cli.output import (
     error,
@@ -34,20 +33,23 @@ def register_convert(main_group):
         "--output", "-o", default=str(get_data_dir() / "exports" / "all_assets_list.json"), help="Output file"
     )
     @click.option("--type", "-t", "forced_type", default=None, help="Force a specific type")
-    def convert_universal(inputs: tuple[str, ...], output: str, forced_type: str | None) -> None:
+    @click.option(
+        "--from",
+        "source",
+        type=click.Choice(["auto", "answers", "typed", "generic_title", "activities", "creations"]),
+        default="auto",
+        help="Input format (default: detect per file)",
+    )
+    def convert_universal(inputs: tuple[str, ...], output: str, forced_type: str | None, source: str) -> None:
         """Normalize multiple JSON export files into a unified assets list."""
-        all_items: list[dict] = []
-        for fpath in inputs:
-            all_items.extend(load_json(fpath))
+        assets = convert_files(inputs, forced_type=forced_type, source=None if source == "auto" else source)
 
-        if not all_items:
+        if not assets:
             error("No valid items found.")
             raise SystemExit(1)
 
-        converted = convert_items(all_items, forced_type)
-        with open(output, "w", encoding="utf-8") as f:
-            json.dump(converted, f, ensure_ascii=False, indent=2)
-        success(f"Converted {f_num(len(converted))} items {f_dim('→')} {f_path(output)}")
+        write_assets(output, assets)
+        success(f"Converted {f_num(len(assets))} items {f_dim('→')} {f_path(output)}")
 
     @convert.command("user-act")
     @click.argument("input_file", default=str(get_data_dir() / "exports" / "zhihu_user_activities.json"))
@@ -58,11 +60,10 @@ def register_convert(main_group):
             error(f"file not found: {input_file}")
             raise SystemExit(1)
 
-        converted = convert_items(load_json(input_file))
+        assets = convert_files([input_file], source="activities")
 
-        with open(output_file, "w", encoding="utf-8") as f:
-            json.dump(converted, f, ensure_ascii=False, indent=2)
-        success(f"Converted {f_num(len(converted))} items {f_dim('→')} {f_path(output_file)}")
+        write_assets(output_file, assets)
+        success(f"Converted {f_num(len(assets))} items {f_dim('→')} {f_path(output_file)}")
 
     @convert.command("markdown")
     @click.argument("path", type=click.Path(exists=True))

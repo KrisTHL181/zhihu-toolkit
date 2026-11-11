@@ -2,7 +2,15 @@
 
 from __future__ import annotations
 
+from zhihu_cli.content.assets import convert_items as assets_convert_items
+from zhihu_cli.content.assets import detect_format as assets_detect_format
 from zhihu_cli.content.universal_converter import convert_items, detect_format
+
+
+def test_shim_reexports_assets_helpers() -> None:
+    """The deprecated shim exposes the very same functions as the assets module."""
+    assert convert_items is assets_convert_items
+    assert detect_format is assets_detect_format
 
 
 def test_detect_format_answers() -> None:

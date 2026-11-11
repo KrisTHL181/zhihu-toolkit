@@ -10,6 +10,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
+from zhihu_cli.content.assets import asset_from_item, load_assets, write_assets
 from zhihu_cli.content.handlers.stats import fetch_creator_content_metrics
 from zhihu_cli.content.handlers.waterfall import stream_handler
 from zhihu_cli.content.utils.wait import wait
@@ -49,35 +50,27 @@ def get_date(d: dict[str, Any]) -> str | None:
     return None
 
 
-def generate_assets_file(output_path: Path) -> list[dict[str, str]]:
+def generate_assets_file(output_path: Path) -> list[dict[str, Any]]:
     """Scrape all user creations and save to output_path. Returns the asset list."""
     initial_url = (
         "https://www.zhihu.com/api/v4/creators/creations/v2/all"
         "?start=0&end=0&limit=20&offset=0&need_co_creation=1&sort_type=created"
     )
 
-    def parse_creations(data: dict[str, Any]) -> Iterable[dict[str, str]]:
+    def parse_creations(data: dict[str, Any]) -> Iterable[dict[str, Any]]:
         for item in data.get("data", []):
-            asset_type = item.get("type")
-            asset_id = item.get("data", {}).get("id")
-            if asset_id and asset_type in ("answer", "pin", "article"):
-                yield {
-                    "id": asset_id,
-                    "type": asset_type,
-                    "title": item.get("data", {}).get("title", ""),
-                    "created_time": item.get("data", {}).get("created_time", 0),
-                }
+            asset = asset_from_item(item, "creations")
+            if asset is not None:
+                yield asset
 
     _cli_print("Scanning your Zhihu creations...")
-    all_assets: list[dict[str, str]] = []
+    all_assets: list[dict[str, Any]] = []
     for i, item in enumerate(stream_handler(initial_url, parse_creations)):
         all_assets.append(item)
         if (i + 1) % 20 == 0:
             _cli_print(f"  Collected {len(all_assets)} items...")
 
-    os.makedirs(output_path.parent, exist_ok=True)
-    with open(output_path, "w", encoding="utf-8") as f:
-        json.dump(all_assets, f, ensure_ascii=False, indent=2)
+    write_assets(output_path, all_assets)
     _cli_print(f"Saved {len(all_assets)} assets → {output_path}")
     return all_assets
 
@@ -158,8 +151,7 @@ def run_batch_daily_analysis(use_aggr: bool = False) -> None:
 
     answer_ids = []
     if assets_file.exists():
-        with open(assets_file, encoding="utf-8") as f:
-            answer_ids = json.load(f)
+        answer_ids = load_assets(assets_file)
         _cli_print(f"Loaded {len(answer_ids)} assets to analyze")
     else:
         _cli_print("all_assets_list.json not found")

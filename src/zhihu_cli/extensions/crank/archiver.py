@@ -20,10 +20,10 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
+from zhihu_cli.content.assets import convert_items
 from zhihu_cli.content.download_contents import sanitize_filename, save_article
 from zhihu_cli.content.handlers.article import scrape_article
 from zhihu_cli.content.handlers.waterfall import stream_handler
-from zhihu_cli.content.universal_converter import convert_items
 from zhihu_cli.content.utils.llm_config import (
     MISSING_API_KEY_MESSAGE,
     build_client,
