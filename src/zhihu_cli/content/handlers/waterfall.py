@@ -71,6 +71,10 @@ class PageStream(Iterator[Any]):
     :ivar stalled: Whether pagination stopped because the server returned
         :data:`EMPTY_PAGE_LIMIT` consecutive empty pages — a server-side
         enumeration cap, not a user cap.
+
+    Call :meth:`close` to abandon a partially-read stream; it closes the page
+    generator deterministically and leaves ``truncated`` / ``stalled`` alone,
+    because a consumer's early stop is neither.
     """
 
     def __init__(self, source: Iterator[Any], stats: _StreamStats) -> None:
@@ -102,6 +106,31 @@ class PageStream(Iterator[Any]):
                         stacklevel=2,
                     )
             raise
+
+    def close(self) -> None:
+        """Stop pagination and release the underlying page generator.
+
+        A consumer that abandons a partially-read stream (``for ... break``)
+        leaves the generator suspended at its last ``yield`` until garbage
+        collection reaches it.  Closing makes that deterministic and stops any
+        further page fetches.
+
+        Closing is a *consumer* decision, not a server-side condition: it
+        leaves :attr:`truncated` and :attr:`stalled` untouched and does not
+        emit the incomplete-stream warning.  The call is idempotent and safe
+        on a stream that has already ended.
+
+        :raises RuntimeError: If the page generator is currently executing in
+            another thread — the same restriction as ``generator.close()``.
+        """
+        if self._exhausted:
+            return
+        # Set the flag first: a concurrent ``next()`` then sees StopIteration
+        # instead of touching a generator this call is about to close.
+        self._exhausted = True
+        source_close = getattr(self._source, "close", None)
+        if callable(source_close):
+            source_close()
 
     @property
     def totals(self) -> int | None:
