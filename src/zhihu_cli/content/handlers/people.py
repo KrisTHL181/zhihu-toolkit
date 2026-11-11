@@ -1,12 +1,14 @@
 from __future__ import annotations
 
 import itertools
-from collections.abc import Iterable
+from collections.abc import Iterable, Iterator
+from functools import partial
 from typing import Any
 
 from zhihu_cli.content.handlers import MEMBER_API, fmt_time, safe_json
 from zhihu_cli.content.handlers.requests import session
 from zhihu_cli.content.handlers.waterfall import PAGE_SIZE, stream_handler
+from zhihu_cli.content.utils.html2markdown import converter
 from zhihu_cli.content.utils.text_clean import strip_html_tags
 
 
@@ -134,29 +136,111 @@ def _until_since(items: Iterable[dict[str, Any]], since: str | None) -> Iterable
         yield from items
         return
 
-    for item in items:
-        created = item.get("created_time") or ""
-        if created[:1].isdigit() and created[:10] < since[:10]:
-            return
-        yield item
+    try:
+        for item in items:
+            created: Any = item.get("created_time") or ""
+            # Listing items normally carry a formatted string, but the
+            # full-content shape returned by ``stream_member_answers`` uses
+            # integer timestamps (matching ``question.scrape_answers``).
+            # Normalise both before the date comparison so ``since=`` keeps
+            # working in either mode.
+            if isinstance(created, (int, float)):
+                created = fmt_time(created)
+            created = str(created)
+            if created[:1].isdigit() and created[:10] < since[:10]:
+                return
+            yield item
+    finally:
+        # Deterministic cleanup: a caller that breaks out of the wrapper (or
+        # hits the date cutoff) must not leave the page generator suspended.
+        # ``PageStream.close()`` is idempotent and lists have no ``close``.
+        close = getattr(items, "close", None)
+        if callable(close):
+            close()
 
 
 # ── answer list ─────────────────────────────────────────────────────────────
 
 
-def _parse_member_answer(item: dict[str, Any]) -> dict[str, Any]:
+#: ``include`` fields for the lightweight answer listing (no body).
+_MEMBER_ANSWER_INCLUDE = (
+    "data%5B%2A%5D.excerpt%2Cdata%5B%2A%5D.voteup_count%2Cdata%5B%2A%5D.comment_count%2Cdata%5B%2A%5D.is_copyable"
+)
+
+#: ``include`` fields for ``include_content=True``.  The member-answers
+#: endpoint returns the full HTML body only when ``content`` is requested;
+#: ``favlists_count``/``thanks_count`` and the nested ``question`` object are
+#: not part of the lightweight listing but are needed to build a corpus.
+_MEMBER_ANSWER_INCLUDE_FULL = (
+    "data%5B%2A%5D.content%2Cdata%5B%2A%5D.voteup_count"
+    "%2Cdata%5B%2A%5D.comment_count%2Cdata%5B%2A%5D.is_copyable"
+    "%2Cdata%5B%2A%5D.favlists_count%2Cdata%5B%2A%5D.thanks_count"
+    "%2Cdata%5B%2A%5D.content_need_truncated%2Cdata%5B%2A%5D.author"
+    "%2Cdata%5B%2A%5D.question"
+)
+
+#: ``sort_by`` values the member-answers endpoint documents.  ``voteups`` is
+#: the one a corpus builder wants (high-vote answers first); ``created`` is the
+#: only order for which ``since=`` can stop pagination early.
+_MEMBER_ANSWER_SORT_BY = frozenset(("created", "voteups"))
+
+
+def _parse_member_answer(
+    item: dict[str, Any],
+    *,
+    include_content: bool = False,
+    raw: bool = False,
+) -> dict[str, Any]:
+    """Normalise one member-answer listing item.
+
+    The default shape is the lightweight listing (excerpt + formatted times)
+    that existing callers consume.  ``include_content=True`` returns the full
+    body instead, in the same shape as
+    :func:`zhihu_cli.content.handlers.question.scrape_answers`: integer
+    timestamps, ``vote``/``comment``/``favorite``/``thanks`` counts and the
+    author.  ``raw`` only matters in that mode and leaves the HTML unconverted.
+    """
     question = item.get("question") or {}
+    answer_id = item.get("id", "")
+    question_id = question.get("id", "")
+    url = f"https://www.zhihu.com/question/{question_id}/answer/{answer_id}"
+
+    if not include_content:
+        return {
+            "type": "answer",
+            "id": answer_id,
+            "question_id": question_id,
+            "title": question.get("title", ""),
+            "excerpt": item.get("excerpt", ""),
+            "url": url,
+            "created_time": fmt_time(item.get("created_time")),
+            "updated_time": fmt_time(item.get("updated_time")),
+            "voteup_count": item.get("voteup_count", 0),
+            "comment_count": item.get("comment_count", 0),
+            "is_copyable": item.get("is_copyable", True),
+        }
+
+    author = item.get("author") or {}
+    content = item.get("content") or ""
+    if not raw:
+        content = converter.convert(content)
     return {
         "type": "answer",
-        "id": item.get("id", ""),
-        "question_id": question.get("id", ""),
+        "id": str(answer_id),
+        "question_id": str(question_id),
         "title": question.get("title", ""),
-        "excerpt": item.get("excerpt", ""),
-        "url": f"https://www.zhihu.com/question/{question.get('id', '')}/answer/{item.get('id', '')}",
-        "created_time": fmt_time(item.get("created_time")),
-        "updated_time": fmt_time(item.get("updated_time")),
-        "voteup_count": item.get("voteup_count", 0),
-        "comment_count": item.get("comment_count", 0),
+        "url": url,
+        "content": content,
+        "author": author.get("name", "anonymous"),
+        "author_token": author.get("url_token", ""),
+        "vote": item.get("voteup_count", 0),
+        "comment": item.get("comment_count", 0),
+        "favorite": item.get("favlists_count", 0),
+        "thanks": item.get("thanks_count", 0),
+        "created_time": int(item.get("created_time", 0) or 0),
+        "updated_time": int(item.get("updated_time", 0) or 0),
+        "question_created": int(question.get("created", 0) or 0),
+        "truncated": bool(item.get("content_need_truncated", False)),
         "is_copyable": item.get("is_copyable", True),
     }
 
@@ -166,13 +250,73 @@ def _parse_answer_list(data: dict[str, Any]) -> Iterable[dict[str, Any]]:
         yield _parse_member_answer(item)
 
 
+def _parse_full_answer_list(data: dict[str, Any], *, raw: bool = False) -> Iterable[dict[str, Any]]:
+    for item in data.get("data", []):
+        yield _parse_member_answer(item, include_content=True, raw=raw)
+
+
+def stream_member_answers(
+    url_token: str,
+    limit: int = PAGE_SIZE,
+    max_items: int | None = None,
+    since: str | None = None,
+    *,
+    include_content: bool = False,
+    sort_by: str = "created",
+    raw: bool = False,
+) -> Iterator[dict[str, Any]]:
+    """Stream a member's answers, one dict per answer.
+
+    The return value is the :class:`~zhihu_cli.content.handlers.waterfall.PageStream`
+    itself when ``since`` is unset, so ``close()``/``totals``/``stalled`` stay
+    reachable.  With ``since`` the result is an early-stopping wrapper iterator
+    and those pagination attributes are not exposed.
+
+    :param url_token: The member's url_token.
+    :param limit: Page size for each API request.
+    :param max_items: Maximum total items to return.
+    :param since: Stop paginating at the first answer created before this
+        ``YYYY-MM-DD`` / ``YYYY-MM-DD HH:MM:SS`` value.  Only valid with
+        ``sort_by="created"`` because it relies on the newest-first order.
+    :param include_content: Request the full HTML body and return the
+        full-content shape (``content``, integer timestamps, vote/comment/
+        favorite/thanks counts, author token, question creation time).
+    :param sort_by: ``"created"`` (default) or ``"voteups"``.  Corpus builders
+        usually want ``"voteups"`` so a per-author cap keeps the best answers
+        rather than the newest.
+    :param raw: Leave ``content`` as HTML instead of converting it to
+        Markdown.  Ignored unless ``include_content`` is true.
+    :raises ValueError: for an unknown ``sort_by``, or for ``since`` combined
+        with a non-``created`` order.
+    """
+    if sort_by not in _MEMBER_ANSWER_SORT_BY:
+        allowed = ", ".join(sorted(_MEMBER_ANSWER_SORT_BY))
+        raise ValueError(f"sort_by must be one of {allowed}; got {sort_by!r}")
+    if since and sort_by != "created":
+        raise ValueError("since= relies on newest-first pagination; use sort_by='created' with it")
+
+    include = _MEMBER_ANSWER_INCLUDE_FULL if include_content else _MEMBER_ANSWER_INCLUDE
+    url = f"{MEMBER_API.format(token=url_token)}/answers?include={include}&offset=0&limit={limit}&sort_by={sort_by}"
+    parser = partial(_parse_full_answer_list, raw=raw) if include_content else _parse_answer_list
+
+    stream = stream_handler(url, parser, max_items=max_items)
+    return _until_since(stream, since) if since else stream
+
+
 def fetch_member_answers(
     url_token: str,
     limit: int = PAGE_SIZE,
     max_items: int | None = None,
     since: str | None = None,
+    *,
+    include_content: bool = False,
+    sort_by: str = "created",
+    raw: bool = False,
 ) -> list[dict[str, Any]]:
     """Fetch a member's answers list.
+
+    This is the eager form of :func:`stream_member_answers`; see that function
+    for the meaning of ``include_content``, ``sort_by`` and ``raw``.
 
     :param url_token: The member's url_token.
     :param limit: Page size for each API request.
@@ -181,13 +325,17 @@ def fetch_member_answers(
         ``YYYY-MM-DD`` / ``YYYY-MM-DD HH:MM:SS`` value.  Relies on the
         newest-first order of ``sort_by=created``.
     """
-    url = (
-        f"{MEMBER_API.format(token=url_token)}/answers"
-        f"?include=data%5B%2A%5D.excerpt%2Cdata%5B%2A%5D.voteup_count"
-        f"%2Cdata%5B%2A%5D.comment_count%2Cdata%5B%2A%5D.is_copyable"
-        f"&offset=0&limit={limit}&sort_by=created"
+    return list(
+        stream_member_answers(
+            url_token,
+            limit=limit,
+            max_items=max_items,
+            since=since,
+            include_content=include_content,
+            sort_by=sort_by,
+            raw=raw,
+        )
     )
-    return list(_until_since(stream_handler(url, _parse_answer_list, max_items=max_items), since))
 
 
 # ── article list ────────────────────────────────────────────────────────────

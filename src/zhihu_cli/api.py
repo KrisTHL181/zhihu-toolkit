@@ -70,6 +70,7 @@ __all__ = [
     "fetch_article_item",
     "scrape_question_data",
     "scrape_answers",
+    "stream_answers",
     "scrape_answer_page",
     "scrape_pin",
     "scrape_zvideo",
@@ -87,6 +88,7 @@ __all__ = [
     "fetch_following_collections",
     "fetch_member_profile",
     "fetch_member_answers",
+    "stream_member_answers",
     "fetch_member_articles",
     "fetch_member_pins",
     "fetch_member_questions",
@@ -327,6 +329,11 @@ def scrape_answers(*args: Any, **kwargs: Any) -> Iterable[dict[str, Any]]:
     return _call("question", "scrape_answers", *args, **kwargs)
 
 
+def stream_answers(*args: Any, **kwargs: Any) -> Iterable[dict[str, Any]]:
+    """Iterate a question's answers lazily — :func:`zhihu_cli.content.handlers.question.stream_answers`."""
+    return _call("question", "stream_answers", *args, **kwargs)
+
+
 def scrape_answer_page(*args: Any, **kwargs: Any) -> tuple[dict[str, Any], str]:
     """Return ``(metadata, markdown)`` for one answer — ``handlers.question.scrape_answer_page``."""
     return _call("question", "scrape_answer_page", *args, **kwargs)
@@ -419,6 +426,11 @@ def fetch_member_profile(*args: Any, **kwargs: Any) -> dict[str, Any] | None:
 def fetch_member_answers(*args: Any, **kwargs: Any) -> list[dict[str, Any]]:
     """Return a member's answers — ``handlers.people.fetch_member_answers``."""
     return _call("people", "fetch_member_answers", *args, **kwargs)
+
+
+def stream_member_answers(*args: Any, **kwargs: Any) -> Iterable[dict[str, Any]]:
+    """Iterate a member's answers lazily — ``handlers.people.stream_member_answers``."""
+    return _call("people", "stream_member_answers", *args, **kwargs)
 
 
 def fetch_member_articles(*args: Any, **kwargs: Any) -> list[dict[str, Any]]:

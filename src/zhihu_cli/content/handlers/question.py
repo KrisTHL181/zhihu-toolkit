@@ -10,15 +10,19 @@ from urllib.parse import urlparse
 
 from zhihu_cli.content.handlers import ANSWER_PATH_RE, canonical_answer_url, fmt_time, safe_json
 from zhihu_cli.content.handlers.requests import fetch_json, fetch_page_html, get_page_state, session
-from zhihu_cli.content.handlers.waterfall import stream_handler
+from zhihu_cli.content.handlers.waterfall import PageStream, _set_query_param, stream_handler
 from zhihu_cli.content.utils.html2markdown import converter
 
-ANSWER_FEEDS_URL = (
-    "https://api.zhihu.com/questions/{question_id}/feeds"
-    "?include=content,big_card_summary,media_detail,reaction_instruction,is_author,is_thanked,"
+#: Default ``include`` fields for the answer feed.  ``content`` is the answer
+#: body; the rest are feed annotations ``stream_answers`` parses.
+ANSWER_FEEDS_INCLUDE = (
+    "content,big_card_summary,media_detail,reaction_instruction,is_author,is_thanked,"
     "voting,is_favorited,label_info,content_text_length,reactions,"
     "is_collapsed,collapse_reason,collapsed_by"
-    "&order=default&show_detail=1"
+)
+
+ANSWER_FEEDS_URL = (
+    f"https://api.zhihu.com/questions/{{question_id}}/feeds?include={ANSWER_FEEDS_INCLUDE}&order=default&show_detail=1"
 )
 
 # Appended to :data:`ANSWER_FEEDS_URL` to switch the feed from the default view
@@ -130,30 +134,64 @@ def scrape_question_data(question_url: str) -> tuple[dict[str, Any], str]:
     return parse_question_metadata(item_data), converter.convert(item_data.get("detail") or "")
 
 
-def scrape_answers(
+def stream_answers(
     question_data: dict[str, Any],
     raw: bool = False,
     limit: int = 5,
     max_items: int | None = None,
     collapsed: bool = False,
-) -> Iterable[dict[str, Any]]:
-    """Yield answers for a question, one dict per answer.
+    *,
+    order: str = "default",
+    include: str | None = None,
+    include_question: bool = False,
+) -> PageStream:
+    """Stream answers for a question, one dict per answer.
 
     :param question_data: dict with at least an ``"id"`` key (the question ID).
     :param raw: when True, return raw HTML in the ``"content"`` field
-        instead of converting to Markdown.
+        instead of converting to Markdown.  Also applies to
+        ``question_description`` when ``include_question`` is set.
     :param limit: number of answers requested per API page.
     :param max_items: optional cap on the total number of answers yielded
         (stops pagination early when reached).
     :param collapsed: when True, fetch the collapsed (折叠) answers section
         instead of the default view.  Each yielded dict then also carries
         ``"is_collapsed"``, ``"collapse_reason"`` and ``"collapsed_by"``.
+    :param order: feed order passed to the API.  ``"default"`` is Zhihu's
+        ranking; ``"created"`` is chronological (needed for new-answer
+        discovery).  Any non-empty value is forwarded, so new server-side
+        orders can be used without a library change.
+    :param include: advance escape hatch that replaces the whole ``include=``
+        list.  The parser still only extracts the fields it knows, and must
+        keep ``content`` for the body to be present.
+    :param include_question: append ``question.detail`` to the request and add
+        the question metadata a corpus builder needs to every answer dict:
+        ``question_id``, ``question_title``, ``question_created``,
+        ``question_description``, ``author_token``, ``thanks`` and
+        ``truncated``.
+    :raises ValueError: when ``order`` is empty.
     """
+    if not order:
+        raise ValueError("order must be a non-empty string")
+
+    include_fields = ANSWER_FEEDS_INCLUDE if include is None else include
+    if include_question:
+        fields = [field.strip() for field in include_fields.split(",") if field.strip()]
+        if "question.detail" not in fields:
+            fields.append("question.detail")
+        include_fields = ",".join(fields)
+
     url = ANSWER_FEEDS_URL.replace("{question_id}", str(question_data["id"]))
+    if include_fields != ANSWER_FEEDS_INCLUDE:
+        url = _set_query_param(url, "include", include_fields)
+    if order != "default":
+        url = _set_query_param(url, "order", order)
     if collapsed:
         url += COLLAPSED_FILTER
 
-    def parse_ans(data):
+    question_id = str(question_data["id"])
+
+    def parse_ans(data: dict[str, Any]) -> Iterable[dict[str, Any]]:
         for item in data.get("data", []):
             # /feeds endpoint wraps answers in a "target" field
             ans = item.get("target", item)
@@ -162,7 +200,7 @@ def scrape_answers(
             content = ans.get("content", "")
             if not raw:
                 content = converter.convert(content)
-            yield {
+            answer: dict[str, Any] = {
                 "author": ans.get("author", {}).get("name", "anonymous"),
                 "id": str(ans.get("id", ans.get("url", "/unknown").split("/")[-1])),
                 "vote": ans.get("voteup_count", 0),
@@ -175,8 +213,53 @@ def scrape_answers(
                 "collapse_reason": ans.get("collapse_reason") or "",
                 "collapsed_by": ans.get("collapsed_by") or "",
             }
+            if include_question:
+                question = ans.get("question") or {}
+                detail = question.get("detail")
+                if isinstance(detail, str) and not raw:
+                    detail = converter.convert(detail)
+                answer.update(
+                    {
+                        "question_id": str(question.get("id") or question_id),
+                        "question_title": question.get("title") or "",
+                        "question_created": int(question.get("created", 0) or 0),
+                        "question_description": detail,
+                        "author_token": (ans.get("author") or {}).get("url_token", ""),
+                        "thanks": ans.get("thanks_count", 0),
+                        "truncated": bool(ans.get("content_need_truncated", False)),
+                    }
+                )
+            yield answer
 
     return stream_handler(url, parse_ans, limit=limit, max_items=max_items)
+
+
+def scrape_answers(
+    question_data: dict[str, Any],
+    raw: bool = False,
+    limit: int = 5,
+    max_items: int | None = None,
+    collapsed: bool = False,
+    *,
+    order: str = "default",
+    include: str | None = None,
+    include_question: bool = False,
+) -> Iterable[dict[str, Any]]:
+    """Yield answers for a question, one dict per answer.
+
+    Backwards-compatible alias for :func:`stream_answers`; see that function
+    for the full parameter documentation.
+    """
+    return stream_answers(
+        question_data,
+        raw=raw,
+        limit=limit,
+        max_items=max_items,
+        collapsed=collapsed,
+        order=order,
+        include=include,
+        include_question=include_question,
+    )
 
 
 def upvote_answer(answer_id: str) -> dict[str, Any]:
