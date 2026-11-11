@@ -75,7 +75,7 @@ def _parse_collection_contents(data: dict[str, Any]) -> Iterable[dict[str, Any]]
 
         # Answers nest the title under `question.title`; articles/pins carry it at top level.
         if ttype == "answer":
-            title = item.get("question", {}).get("title", "")
+            title = (item.get("question") or {}).get("title", "")
         else:
             title = item.get("title", "")
 

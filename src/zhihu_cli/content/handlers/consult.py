@@ -31,7 +31,7 @@ def _extract_question_text(question: dict[str, Any]) -> str:
 
 def _parse_consult_answer(item: dict[str, Any]) -> dict[str, Any]:
     """Normalize a single consultation item from the infinity API."""
-    question = item.get("question", {})
+    question = item.get("question") or {}
     questioner = item.get("questioner", {})
     responder = item.get("responder", {})
     services = item.get("services", [])

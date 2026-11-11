@@ -63,7 +63,7 @@ def _stats_for_answer(question_id: str, answer_id: str) -> dict[str, Any]:
     if "error" in data:
         raise ValueError(f"API error for answer {answer_id}: {data['error']}")
     stats = _extract_stats(data)
-    stats["title"] = data.get("question", {}).get("title", f"answer {answer_id}")
+    stats["title"] = (data.get("question") or {}).get("title", f"answer {answer_id}")
     stats["url"] = f"https://www.zhihu.com/question/{question_id}/answer/{answer_id}"
     stats["type"] = "answers"
     return stats

@@ -145,7 +145,7 @@ def _until_since(items: Iterable[dict[str, Any]], since: str | None) -> Iterable
 
 
 def _parse_member_answer(item: dict[str, Any]) -> dict[str, Any]:
-    question = item.get("question", {})
+    question = item.get("question") or {}
     return {
         "type": "answer",
         "id": item.get("id", ""),
@@ -376,7 +376,7 @@ def _parse_activity_item(raw: dict[str, Any]) -> dict[str, Any]:
     if url and url.startswith("https://api.zhihu.com/"):
         # Convert API URLs to web URLs
         url = url.replace("https://api.zhihu.com/answers/", "https://www.zhihu.com/question/")
-        if target_type == "answer" and target.get("question", {}).get("id"):
+        if target_type == "answer" and (target.get("question") or {}).get("id"):
             url = f"https://www.zhihu.com/question/{target['question']['id']}/answer/{target.get('id', '')}"
         elif target_type == "article":
             url = f"https://zhuanlan.zhihu.com/p/{target.get('id', '')}"

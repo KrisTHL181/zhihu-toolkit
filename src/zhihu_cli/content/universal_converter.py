@@ -8,6 +8,8 @@ Supported inputs:
   - Any file with items containing 'id' and 'title' (use --type to force)
 """
 
+from __future__ import annotations
+
 import argparse
 import json
 import sys
@@ -18,27 +20,39 @@ from zhihu_cli.paths import zhihu_home
 
 
 def detect_format(items: list[dict[str, Any]]) -> str:
-    """Heuristically detect the format of the first item."""
-    if not items:
-        return "unknown"
-    first = items[0]
-    if "question" in first and isinstance(first["question"], dict):
-        return "answers"  # raw API answer format: title under question.title
-    if "type" in first:
-        return "typed"  # already has 'type' field (user-act format)
-    if "title" in first and "id" in first:
-        return "generic_title"  # raw API article format
+    """Heuristically detect the format from the first recognisable item.
+
+    Scanning continues past items that match no known shape, so a leading
+    malformed item (for example a deleted question serialized as ``null``)
+    does not make the whole list look undetectable.
+
+    :param items: The exported items to inspect.
+    :returns: One of ``"answers"``, ``"typed"``, ``"generic_title"`` or
+        ``"unknown"``.
+    """
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        if isinstance(item.get("question"), dict):
+            return "answers"
+        if "type" in item:
+            return "typed"
+        if "title" in item and "id" in item:
+            return "generic_title"
     return "unknown"
 
 
 def convert_items(items: list[dict[str, Any]], forced_type: str | None = None) -> list[dict[str, str]]:
     """Convert items to unified format: {id, type, title, url?}."""
     result = []
-    fmt = detect_format(items) if not forced_type else "forced"
+    fmt = detect_format(items)
 
     for item in items:
         # Ensure id is string
-        asset_id = str(item.get("id", ""))
+        raw_id = item.get("id")
+        if raw_id is None:
+            continue
+        asset_id = str(raw_id)
         if not asset_id:
             continue
 
@@ -56,9 +70,10 @@ def convert_items(items: list[dict[str, Any]], forced_type: str | None = None) -
 
         # Determine title
         if fmt == "answers":
-            title = item.get("question", {}).get("title", "untitled answer")
+            question = item.get("question")
+            title = (question.get("title") if isinstance(question, dict) else None) or "untitled answer"
         else:
-            title = item.get("title", f"{asset_type}_{asset_id}")
+            title = item.get("title") or f"{asset_type}_{asset_id}"
 
         # Build unified asset
         asset = {"id": asset_id, "type": asset_type, "title": title}

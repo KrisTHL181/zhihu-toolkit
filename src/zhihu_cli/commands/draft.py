@@ -133,8 +133,8 @@ def register_draft(main_group):
 
         heading("Answer Drafts")
         for i, d in enumerate(drafts):
-            title = d.get("question", {}).get("title", "") or "(no title)"
-            qid = d.get("question", {}).get("id", "?")
+            title = (d.get("question") or {}).get("title", "") or "(no title)"
+            qid = (d.get("question") or {}).get("id", "?")
             ctime = fmt_time(d.get("created_time", 0))
             utime = fmt_time(d.get("updated_time", 0))
             words = d.get("content_words", 0)
@@ -215,8 +215,8 @@ def register_draft(main_group):
         if draft_type == "answer":
             return [
                 {
-                    "id": d.get("question", {}).get("id"),
-                    "title": d.get("question", {}).get("title", ""),
+                    "id": (d.get("question") or {}).get("id"),
+                    "title": (d.get("question") or {}).get("title", ""),
                     "content_words": d.get("content_words", 0),
                     "excerpt": d.get("excerpt", ""),
                     "created_time": d.get("created_time"),

@@ -1,5 +1,7 @@
 """Zhihu feeds (recommend/follow) handler."""
 
+from __future__ import annotations
+
 from collections.abc import Iterable
 from typing import Any
 
@@ -19,7 +21,7 @@ def _parse_author(author: dict[str, Any] | None) -> dict[str, Any]:
 
 
 def _parse_answer_target(target: dict[str, Any]) -> dict[str, Any]:
-    question = target.get("question", {})
+    question = target.get("question") or {}
     return {
         "target_type": "answer",
         "id": target.get("id", ""),

@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from zhihu_cli.content.handlers.people import _until_since
+from zhihu_cli.content.handlers.people import _parse_member_answer, _until_since
 
 
 def _item(created: str, item_id: int) -> dict:
@@ -44,3 +44,12 @@ def test_until_since_keeps_unknown_timestamps() -> None:
     items = [_item("unknown time", 1), _item("2024-03-01 00:00:00", 2)]
 
     assert [item["id"] for item in _until_since(items, "2024-02-01")] == [1, 2]
+
+
+def test_parse_member_answer_tolerates_null_question() -> None:
+    """A null question yields empty question fields instead of raising."""
+    result = _parse_member_answer({"id": "2", "question": None})
+
+    assert result["question_id"] == ""
+    assert result["title"] == ""
+    assert result["url"].endswith("/answer/2")
