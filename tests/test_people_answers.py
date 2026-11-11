@@ -53,6 +53,7 @@ def test_stream_full_content_requests_body_and_vote_order(monkeypatch: pytest.Mo
 
     assert "sort_by=voteups" in captured["url"]
     assert "data%5B%2A%5D.content" in captured["url"]
+    assert "favlists_count" not in captured["url"]
     assert captured["kwargs"]["max_items"] is None
     assert captured["kwargs"]["max_pages"] is None
     assert captured["kwargs"]["delay"] == 1.0

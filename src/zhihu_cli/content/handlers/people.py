@@ -172,10 +172,13 @@ _MEMBER_ANSWER_INCLUDE = (
 #: endpoint returns the full HTML body only when ``content`` is requested;
 #: ``favlists_count``/``thanks_count`` and the nested ``question`` object are
 #: not part of the lightweight listing but are needed to build a corpus.
+#: ``favlists_count`` is deliberately not requested: the member-answers
+#: endpoint does not provide it, and asking for it can make the server return
+#: a misleading zero instead of omitting the field.
 _MEMBER_ANSWER_INCLUDE_FULL = (
     "data%5B%2A%5D.content%2Cdata%5B%2A%5D.voteup_count"
     "%2Cdata%5B%2A%5D.comment_count%2Cdata%5B%2A%5D.is_copyable"
-    "%2Cdata%5B%2A%5D.favlists_count%2Cdata%5B%2A%5D.thanks_count"
+    "%2Cdata%5B%2A%5D.thanks_count"
     "%2Cdata%5B%2A%5D.content_need_truncated%2Cdata%5B%2A%5D.author"
     "%2Cdata%5B%2A%5D.question"
 )
