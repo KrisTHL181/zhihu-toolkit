@@ -428,7 +428,9 @@ def _parse_member_pin(item: dict[str, Any]) -> dict[str, Any]:
         "type": "pin",
         "id": item.get("id", ""),
         "title": clean_title,
-        "excerpt": item.get("excerpt", ""),
+        # The pin API leaves ``excerpt`` null; keep the listing schema a
+        # string so callers can slice it without a None check.
+        "excerpt": item.get("excerpt") or "",
         "content_text": content,
         "url": f"https://www.zhihu.com/pin/{item.get('id', '')}",
         "created_time": fmt_time(item.get("created")),

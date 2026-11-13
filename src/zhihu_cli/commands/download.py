@@ -252,7 +252,9 @@ def _pin_item_task(
             "pin_id": str(meta.get("id", "")),
         }
         filepath = save_pin(source_url, save_meta, md, output_dir, with_media=with_media)
-        preview = (meta.get("excerpt", "") or "")[:30]
+        # ``excerpt`` is derived from the body for page-scraped pins; the title
+        # (``pin <id>``) is the fallback for pins whose body has no text.
+        preview = (meta.get("excerpt") or meta.get("title") or "")[:30]
         with _output_lock:
             echo(f"  {item_index(index, total)} {preview} -> {f_path(os.path.basename(filepath))}")
         return {

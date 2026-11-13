@@ -2,11 +2,13 @@
 
 from __future__ import annotations
 
+import re
 from typing import Any
 
 from zhihu_cli.content.handlers import canonical_pin_url, fmt_time
 from zhihu_cli.content.handlers.requests import fetch_page_html, get_page_state
 from zhihu_cli.content.utils.html2markdown import converter
+from zhihu_cli.content.utils.text_clean import strip_html_tags
 
 
 def _canonical_pin_url(pin_url: str) -> str:
@@ -36,6 +38,32 @@ def _pick(item: dict[str, Any], *keys: str) -> Any:
     return None
 
 
+def _content_plain_text(content: Any) -> str:
+    """Flatten a pin's ``content`` field to plain, single-line text.
+
+    Page-state pins carry ``content`` as a list of blocks (text, image, video,
+    link cards), while API responses may carry a plain string.  Only the text
+    a block actually holds is kept — images and videos contribute nothing —
+    and the result is stripped of HTML marking, unescaped, and collapsed onto
+    one line so it can be used as a title/preview.
+
+    :param content: A pin's ``content`` value in either shape.
+    :returns: The concatenated plain text, or an empty string.
+    """
+    if isinstance(content, list):
+        parts: list[str] = []
+        for block in content:
+            if not isinstance(block, dict):
+                continue
+            text = block.get("content") or block.get("ownText") or block.get("own_text") or ""
+            if isinstance(text, str) and text:
+                parts.append(text)
+        content = " ".join(parts)
+    if not isinstance(content, str):
+        return ""
+    return re.sub(r"\s+", " ", strip_html_tags(content, unescape=True)).strip()
+
+
 def parse_pin_metadata(item: dict[str, Any], users: dict[str, Any] | None = None) -> dict[str, Any]:
     """Build a pin's metadata dict.
 
@@ -47,8 +75,14 @@ def parse_pin_metadata(item: dict[str, Any], users: dict[str, Any] | None = None
     """
     pin_id = item.get("id", "")
     title = item.get("title", "") or f"pin {pin_id}"
-    excerpt = item.get("excerpt", "")
-    content_preview = excerpt or (item.get("content", "")[:200] if item.get("content") else "")
+    excerpt = item.get("excerpt")
+    if not isinstance(excerpt, str):
+        # Page-state pins have no ``excerpt`` field at all and the API leaves
+        # it null, so fall back to the body.  The body is a list of blocks and
+        # must not be sliced directly: callers expect a string and would
+        # otherwise print the whole block list.
+        excerpt = ""
+    content_preview = excerpt or _content_plain_text(item.get("content", ""))[:200]
 
     # Pins do not separate 赞同 from 点赞, so the reaction count is the
     # vote count. ``voteup_count`` is what the field was originally read
