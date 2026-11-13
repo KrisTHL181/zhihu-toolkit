@@ -2,13 +2,12 @@
 
 from __future__ import annotations
 
-import re
 from typing import Any
 
 from zhihu_cli.content.handlers import canonical_pin_url, fmt_time
 from zhihu_cli.content.handlers.requests import fetch_page_html, get_page_state
 from zhihu_cli.content.utils.html2markdown import converter
-from zhihu_cli.content.utils.text_clean import strip_html_tags
+from zhihu_cli.content.utils.text_clean import html_to_plain_text
 
 
 def _canonical_pin_url(pin_url: str) -> str:
@@ -61,7 +60,7 @@ def _content_plain_text(content: Any) -> str:
         content = " ".join(parts)
     if not isinstance(content, str):
         return ""
-    return re.sub(r"\s+", " ", strip_html_tags(content, unescape=True)).strip()
+    return html_to_plain_text(content)
 
 
 def parse_pin_metadata(item: dict[str, Any], users: dict[str, Any] | None = None) -> dict[str, Any]:

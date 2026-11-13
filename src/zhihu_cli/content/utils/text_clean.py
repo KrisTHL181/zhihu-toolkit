@@ -21,6 +21,7 @@ __all__ = [
     "clean_excerpt",
     "clean_text",
     "extract_cjk",
+    "html_to_plain_text",
     "parse_frontmatter",
     "strip_code_blocks",
     "strip_html_tags",
@@ -142,6 +143,21 @@ def strip_html_tags(text: str, *, unescape: bool = False) -> str:
     """
     text = re.sub(r"<[^>]+>", "", text)
     return html.unescape(text) if unescape else text
+
+
+def html_to_plain_text(text: str) -> str:
+    """Flatten HTML to single-line plain text.
+
+    Block-level tags become spaces so text from adjacent paragraphs does not
+    run together; every other tag is dropped, entities are decoded, and
+    whitespace is collapsed onto one line.
+
+    :param text: Text that may contain HTML markup.
+    :returns: The plain text, with no remaining tags or line breaks.
+    """
+    text = re.sub(r"<br\s*/?>|</(?:p|div|li|h[1-6])>", " ", text, flags=re.IGNORECASE)
+    text = strip_html_tags(text, unescape=True)
+    return re.sub(r"\s+", " ", text).strip()
 
 
 def strip_markdown_noise(text: str) -> str:

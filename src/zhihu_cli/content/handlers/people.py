@@ -9,7 +9,7 @@ from zhihu_cli.content.handlers import MEMBER_API, fmt_time, safe_json
 from zhihu_cli.content.handlers.requests import session
 from zhihu_cli.content.handlers.waterfall import PAGE_SIZE, stream_handler
 from zhihu_cli.content.utils.html2markdown import converter
-from zhihu_cli.content.utils.text_clean import strip_html_tags
+from zhihu_cli.content.utils.text_clean import html_to_plain_text, strip_html_tags
 
 
 def follow(user_id: str) -> dict[str, Any]:
@@ -417,12 +417,35 @@ def fetch_member_articles(
 # ── pin list ────────────────────────────────────────────────────────────────
 
 
+def _pin_vote_count(item: dict[str, Any]) -> int | None:
+    """Return a pin's vote count under whichever name the payload uses.
+
+    Pins do not separate 赞同 from 点赞, so the reaction count *is* the vote
+    count.  ``voteup_count`` is what the handler originally read, but no pin
+    payload actually carries it; ``reaction_count`` is the live field and
+    ``like_count`` is the closest older spelling.
+
+    :param item: Raw pin item from the member-pins API.
+    :returns: The first count present, or ``None`` when none is.
+    """
+    for key in ("voteup_count", "reaction_count", "like_count"):
+        value = item.get(key)
+        if value is not None:
+            return value
+    return None
+
+
 def _parse_member_pin(item: dict[str, Any]) -> dict[str, Any]:
     content = item.get("content", "")
     if isinstance(content, list):
         content = "\n".join(block.get("content", "") if isinstance(block, dict) else str(block) for block in content)
 
-    clean_title = strip_html_tags(item.get("excerpt", "") or content or "").strip()[:100]
+    # ``content_text`` is shown verbatim by ``zhihu people pins``, so it must
+    # be plain text rather than raw HTML.  ``excerpt`` is normally null for
+    # pins; the title then falls back to the same flattened body.
+    content_text = html_to_plain_text(content) if isinstance(content, str) else ""
+    excerpt = item.get("excerpt")
+    clean_title = (html_to_plain_text(excerpt) if isinstance(excerpt, str) and excerpt else content_text)[:100]
 
     return {
         "type": "pin",
@@ -430,14 +453,14 @@ def _parse_member_pin(item: dict[str, Any]) -> dict[str, Any]:
         "title": clean_title,
         # The pin API leaves ``excerpt`` null; keep the listing schema a
         # string so callers can slice it without a None check.
-        "excerpt": item.get("excerpt") or "",
-        "content_text": content,
+        "excerpt": excerpt if isinstance(excerpt, str) else "",
+        "content_text": content_text,
         "url": f"https://www.zhihu.com/pin/{item.get('id', '')}",
         "created_time": fmt_time(item.get("created")),
         # The pin payload carries a real ``updated`` timestamp; exposing it is
         # what lets incremental downloads notice an edited pin.
         "updated_time": fmt_time(item.get("updated")),
-        "voteup_count": item.get("voteup_count", 0),
+        "voteup_count": _pin_vote_count(item) or 0,
         "comment_count": item.get("comment_count", 0),
     }
 
@@ -465,7 +488,7 @@ def fetch_member_pins(
     url = (
         f"{MEMBER_API.format(token=url_token)}/pins"
         f"?include=data%5B%2A%5D.excerpt%2Cdata%5B%2A%5D.content"
-        f"%2Cdata%5B%2A%5D.voteup_count%2Cdata%5B%2A%5D.comment_count"
+        f"%2Cdata%5B%2A%5D.reaction_count%2Cdata%5B%2A%5D.comment_count"
         f"&offset=0&limit={limit}&sort_by=created"
     )
     return list(_until_since(stream_handler(url, _parse_pin_list, max_items=max_items), since))
