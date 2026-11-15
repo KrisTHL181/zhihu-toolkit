@@ -15,6 +15,13 @@ from zhihu_cli.commands._helpers import (
     _save_json_output,
 )
 from zhihu_cli.content.handlers import get_type_and_id
+from zhihu_cli.content.handlers.article import (
+    downvote_article,
+    like_article,
+    neutral_article,
+    unlike_article,
+    upvote_article,
+)
 from zhihu_cli.content.handlers.collection import (
     add_to_collection,
     collect,
@@ -35,6 +42,7 @@ from zhihu_cli.content.handlers.comments import (
 )
 from zhihu_cli.content.handlers.delete import delete_content
 from zhihu_cli.content.handlers.people import block, follow, unblock, unfollow
+from zhihu_cli.content.handlers.pin import neutral_pin, upvote_pin
 from zhihu_cli.content.handlers.question import (
     downvote_answer,
     downvote_question,
@@ -122,6 +130,69 @@ def _parse_report_lines(text: str) -> list[tuple[int, str, str | None, str | Non
     return entries
 
 
+# ── vote dispatch ──────────────────────────────────────────────────────────
+
+_VOTE_ACTIONS = ("up", "down", "neutral")
+
+
+def _dispatch_vote(item_type: str | None, item_id: str | None, action: str) -> dict:
+    """Route one vote request to the handler for its content type.
+
+    ``item_type`` is the type reported by
+    :func:`~zhihu_cli.content.handlers.get_type_and_id`; both its plural and
+    singular spellings are accepted.  ``None`` means the caller passed a bare
+    raw ID, which is treated as an answer ID, as it always has been.  An
+    unrecognised URL type keeps the historical fallback to the answer
+    endpoints.
+
+    Pins support up and neutral only — there is no pin downvote — so
+    ``action="down"`` on a pin raises instead of reaching the API.
+
+    :param item_type: ``"answers"``, ``"questions"``, ``"articles"``,
+        ``"pins"`` (or singular), or ``None`` for a raw ID.
+    :param item_id: The content ID; for answers this may be Zhihu's composite
+        ``question_id/answer_id`` form.
+    :param action: ``"up"``, ``"down"``, or ``"neutral"``.
+    :returns: The handler's decoded JSON response.
+    :raises click.ClickException: If *action* is ``"down"`` on a pin, or is not
+        one of the three supported votes.
+    """
+    if action not in _VOTE_ACTIONS:
+        raise click.ClickException(f"Unsupported vote action: {action}")
+
+    kind = (item_type or "answer").lower().removesuffix("s")
+    if kind not in ("answer", "question", "article", "pin"):
+        kind = "answer"
+
+    content_id = item_id or ""
+
+    if action == "up":
+        if kind == "question":
+            return upvote_question(content_id)
+        if kind == "article":
+            return upvote_article(content_id)
+        if kind == "pin":
+            return upvote_pin(content_id)
+        return upvote_answer(_resolve_answer_id(content_id))
+
+    if action == "down":
+        if kind == "pin":
+            raise click.ClickException("Pins do not support downvotes.")
+        if kind == "question":
+            return downvote_question(content_id)
+        if kind == "article":
+            return downvote_article(content_id)
+        return downvote_answer(_resolve_answer_id(content_id))
+
+    # neutral
+    if kind == "article":
+        return neutral_article(content_id)
+    if kind == "pin":
+        return neutral_pin(content_id)
+    # Questions have always gone through the answer endpoint here.
+    return neutral_answer(_resolve_answer_id(content_id))
+
+
 def register_interact(main_group) -> None:
     """Register the interact command group on *main_group*."""
 
@@ -129,7 +200,7 @@ def register_interact(main_group) -> None:
 
     @main_group.group()
     def interact() -> None:
-        """Social interactions — vote, thank, follow, block, comment, collect, report, delete."""
+        """Social interactions — vote, like, thank, follow, block, comment, collect, report, delete."""
 
     # ── helpers ─────────────────────────────────────────────────────────────
 
@@ -144,20 +215,15 @@ def register_interact(main_group) -> None:
 
     @interact.group("vote")
     def interact_vote() -> None:
-        """Vote on answers and questions."""
+        """Vote on answers, questions, articles, and pins."""
 
     @interact_vote.command("up")
     @click.argument("url_or_id")
     @click.option("--json", "output_json", is_flag=True, default=False, help="Output raw JSON response")
     def vote_up(url_or_id: str, output_json: bool) -> None:
-        """Upvote an answer or question."""
+        """Upvote an answer, question, article, or pin."""
         item_type, item_id = _parse_item_url_safe(url_or_id)
-        if item_type in ("answers", "answer"):
-            resp = upvote_answer(_resolve_answer_id(item_id))
-        elif item_type in ("questions", "question"):
-            resp = upvote_question(item_id)
-        else:
-            resp = upvote_answer(url_or_id)  # treat as raw ID
+        resp = _dispatch_vote(item_type, item_id, "up")
         if output_json:
             print_json(resp)
             return
@@ -167,9 +233,9 @@ def register_interact(main_group) -> None:
     @click.argument("url_or_id")
     @click.option("--json", "output_json", is_flag=True, default=False, help="Output raw JSON response")
     def vote_neutral(url_or_id: str, output_json: bool) -> None:
-        """Remove vote from an answer."""
+        """Remove your vote from an answer, question, article, or pin."""
         item_type, item_id = _parse_item_url_safe(url_or_id)
-        resp = neutral_answer(_resolve_answer_id(item_id) if item_type else url_or_id)
+        resp = _dispatch_vote(item_type, item_id, "neutral")
         if output_json:
             print_json(resp)
             return
@@ -179,14 +245,43 @@ def register_interact(main_group) -> None:
     @click.argument("url_or_id")
     @click.option("--json", "output_json", is_flag=True, default=False, help="Output raw JSON response")
     def vote_down(url_or_id: str, output_json: bool) -> None:
-        """Downvote an answer or question."""
+        """Downvote an answer, question, or article (pins have no downvote)."""
         item_type, item_id = _parse_item_url_safe(url_or_id)
-        if item_type in ("answers", "answer"):
-            resp = downvote_answer(_resolve_answer_id(item_id))
-        elif item_type in ("questions", "question"):
-            resp = downvote_question(item_id)
-        else:
-            resp = downvote_answer(url_or_id)
+        resp = _dispatch_vote(item_type, item_id, "down")
+        if output_json:
+            print_json(resp)
+            return
+        echo(resp)
+
+    # ── like ────────────────────────────────────────────────────────────────
+
+    @interact.group("like")
+    def interact_like() -> None:
+        """Like or unlike articles (the red heart, separate from 赞同)."""
+
+    @interact_like.command("add")
+    @click.argument("url_or_id")
+    @click.option("--json", "output_json", is_flag=True, default=False, help="Output raw JSON response")
+    def like_add(url_or_id: str, output_json: bool) -> None:
+        """Like an article (喜欢, independent of 赞同)."""
+        item_type, item_id = _parse_item_url_safe(url_or_id)
+        if item_type not in (None, "articles", "article"):
+            raise click.ClickException("Likes are only supported for articles.")
+        resp = like_article(item_id or url_or_id)
+        if output_json:
+            print_json(resp)
+            return
+        echo(resp)
+
+    @interact_like.command("remove")
+    @click.argument("url_or_id")
+    @click.option("--json", "output_json", is_flag=True, default=False, help="Output raw JSON response")
+    def like_remove(url_or_id: str, output_json: bool) -> None:
+        """Remove your like (喜欢) from an article."""
+        item_type, item_id = _parse_item_url_safe(url_or_id)
+        if item_type not in (None, "articles", "article"):
+            raise click.ClickException("Likes are only supported for articles.")
+        resp = unlike_article(item_id or url_or_id)
         if output_json:
             print_json(resp)
             return

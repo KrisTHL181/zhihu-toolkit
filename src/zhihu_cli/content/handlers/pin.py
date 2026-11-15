@@ -4,10 +4,12 @@ from __future__ import annotations
 
 from typing import Any
 
-from zhihu_cli.content.handlers import canonical_pin_url, fmt_time
-from zhihu_cli.content.handlers.requests import fetch_page_html, get_page_state
+from zhihu_cli.content.handlers import canonical_pin_url, fmt_time, safe_json
+from zhihu_cli.content.handlers.requests import fetch_page_html, get_page_state, session
 from zhihu_cli.content.utils.html2markdown import converter
 from zhihu_cli.content.utils.text_clean import html_to_plain_text
+
+PIN_REACTIONS_URL = "https://www.zhihu.com/api/v4/pins/{pin_id}/reactions"
 
 
 def _canonical_pin_url(pin_url: str) -> str:
@@ -198,3 +200,37 @@ def scrape_pin(pin_url: str) -> tuple[dict[str, Any], str]:
 
     item_data = next(iter(item.values()))
     return parse_pin_metadata(item_data, entities.get("users", {})), _render_body(item_data)
+
+
+def upvote_pin(pin_id: str) -> dict[str, Any]:
+    """Upvote (赞同) a pin.
+
+    Pins have a single reaction counter and no downvote: this endpoint
+    registers an up vote, and ``"neutral"`` removes it.  The server also
+    accepts ``"up"`` here, but the type appears to be ignored — both spellings
+    register the same reaction.
+
+    The POST response carries stale aggregate counts: ``up_count`` is reported
+    as 0 even when the vote registered.  Do not read counts from it; the raw
+    JSON is returned unchanged.
+
+    :param pin_id: Numeric pin ID.
+    :returns: The raw decoded JSON response (its counts may be stale).
+    """
+    resp = session.post(PIN_REACTIONS_URL.format(pin_id=pin_id), json={"type": "like"})
+    return resp.json()
+
+
+def neutral_pin(pin_id: str) -> dict[str, Any]:
+    """Remove your vote (赞同) from a pin.
+
+    Deletion is the only way to clear a pin reaction; pins have no downvote.
+    The DELETE may answer with an empty body, so the response is decoded
+    leniently.
+
+    :param pin_id: Numeric pin ID.
+    :returns: The decoded JSON response, or a success envelope when the body
+        is empty.
+    """
+    resp = session.delete(PIN_REACTIONS_URL.format(pin_id=pin_id))
+    return safe_json(resp)
