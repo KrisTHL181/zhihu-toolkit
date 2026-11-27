@@ -50,10 +50,6 @@ DEFAULT_MAX_IMAGE_SIDE = 8000
 #: Current cache location for the LLM configuration.
 CONFIG_PATH = zhihu_home() / "llm_config.json"
 
-#: Pre-refactor cache location (the old ``crank/`` directory), read as a
-#: fallback and migrated on write.
-LEGACY_CONFIG_PATH = zhihu_home() / "crank" / "llm_config.json"
-
 #: Message shown when no API key could be resolved from any source.
 MISSING_API_KEY_MESSAGE = (
     "LLM API key not configured. Set it via:\n"
@@ -120,16 +116,13 @@ class LLMConfig:
 def load() -> dict[str, str]:
     """Read the cached LLM configuration.
 
-    Reads :data:`CONFIG_PATH`, falling back to the read-only legacy location
-    :data:`LEGACY_CONFIG_PATH` when the current file does not exist.  A read
-    never writes to disk.
+    Reads :data:`CONFIG_PATH`.  A read never writes to disk.
 
     :returns: The cached string values, or an empty dict when nothing usable
         is cached.
     """
-    path = CONFIG_PATH if CONFIG_PATH.exists() else LEGACY_CONFIG_PATH
     try:
-        with open(path, encoding="utf-8") as f:
+        with open(CONFIG_PATH, encoding="utf-8") as f:
             data = json.load(f)
     except (OSError, ValueError):
         return {}
@@ -147,8 +140,7 @@ def save(
     """Persist the LLM configuration atomically.
 
     Writes to a temporary file in the same directory and then replaces
-    :data:`CONFIG_PATH`, so a crash can never leave a truncated cache.  The
-    legacy file is deleted best-effort afterwards.
+    :data:`CONFIG_PATH`, so a crash can never leave a truncated cache.
 
     :param api_base: API base URL to store.
     :param api_key: API key to store.
@@ -174,10 +166,6 @@ def save(
         json.dump(data, tmp, ensure_ascii=False, indent=2)
         tmp_name = tmp.name
     os.replace(tmp_name, CONFIG_PATH)
-    try:
-        LEGACY_CONFIG_PATH.unlink(missing_ok=True)
-    except OSError:
-        pass  # best-effort migration; the new cache is already durable
 
 
 def supports_vision(cfg: dict[str, str] | None = None) -> bool:
@@ -335,13 +323,12 @@ def build_client(cfg: LLMConfig, *, purpose: str) -> Any:
 
 
 def clear() -> bool:
-    """Delete both the current and legacy LLM config files.
+    """Delete the cached LLM config file.
 
-    :returns: True when at least one of the files existed.
+    :returns: True when the file existed.
     """
-    existed = CONFIG_PATH.exists() or LEGACY_CONFIG_PATH.exists()
+    existed = CONFIG_PATH.exists()
     CONFIG_PATH.unlink(missing_ok=True)
-    LEGACY_CONFIG_PATH.unlink(missing_ok=True)
     return existed
 
 
