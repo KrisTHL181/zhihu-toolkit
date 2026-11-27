@@ -91,7 +91,13 @@ Issues = "https://github.com/KrisTHL181/zhihu-toolkit/issues"
 where = ["src"]
 
 [tool.setuptools.package-data]
-zhihu_cli = ["prompts/*.txt", "nlp_tools/*.txt", "font_reference/*.bin", "font_reference/*.json"]
+zhihu_cli = [
+    "py.typed",
+    "prompts/*.txt",
+    "nlp_tools/*.txt",
+    "font_reference/*.bin",
+    "font_reference/*.json",
+]
 
 [tool.setuptools_scm]
 fallback_version = "0.1.0"

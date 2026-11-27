@@ -94,13 +94,14 @@ Save multiple profiles from different accounts, switch between them with a singl
 ```
 src/zhihu_cli/
 ├── main.py                  # Click CLI — command group hub
+├── api.py                   # supported Python API (the downstream contract)
+├── errors.py                # public exception hierarchy
 ├── output.py                # styled terminal output (Rich)
 ├── content/
 │   ├── handlers/            # one file per Zhihu domain
 │   └── utils/               # HTML↔Markdown, ZSE v4 signing
 ├── creator_tools/           # income analytics + plotting
-├── nlp_tools/               # word count, wordcloud, clustering
-└── extensions/              # plugin system (auto-discovered)
+└── nlp_tools/               # word count, wordcloud, clustering
 ```
 
 | Layer | What It Does |
@@ -110,7 +111,30 @@ src/zhihu_cli/
 | **🌐 Requests** | `curl_cffi` impersonates Chrome's TLS fingerprint to avoid detection |
 | **📄 Extraction** | Prefers direct API calls; falls back to HTML page scraping with `js-initialData` parsing |
 | **📝 Markdown** | HTML → LaTeX preprocessing → recursive traversal → clean Markdown. Reverse for publishing |
-| **🔌 Extensions** | Drop a plugin in `extensions/` with `register_cli(group)` — auto-discovered at startup |
+| **🐍 Library** | `zhihu_cli.api` — lazy imports, normalized errors, per-thread profile pinning |
+
+---
+
+## 🐍 Use as a Library
+
+`zhihu_cli.api` is the supported Python surface. Everything under `content/`, `commands/`, and the other subpackages is internal and may move between releases.
+
+```python
+from zhihu_cli import ZhihuError, fetch_hot_list, rate_limit, scrape_article, use_profile
+
+with use_profile("alt"), rate_limit(2):
+    for item in fetch_hot_list(limit=10):
+        print(item["title"])
+
+metadata, markdown = scrape_article("https://zhuanlan.zhihu.com/p/123456")
+```
+
+The library API is **read-only**: fetch, stream, scrape, comments, profiles, feeds, notifications, drafts, and collections. Publishing, interaction, media download, and the TUI stay CLI-only.
+
+- Calls block; `stream_*` returns a lazy iterable and issues its requests while you iterate.
+- Every failure raises a subclass of `zhihu_cli.ZhihuError` (`AuthError`, `NotFoundError`, `RateLimitError`, `ZhihuHTTPError`), with the original exception as `__cause__`.
+- `use_profile(name)` pins an account per thread without rewriting the global active profile; `rate_limit(qps)` restores the previous limit on exit.
+- The package ships `py.typed`; heavy dependencies load on first use, so `import zhihu_cli` stays cheap.
 
 ---
 
@@ -146,11 +170,11 @@ From a repository clone, `python autocomp.py` detects your shell and prints the 
 
 ## 🤝 Contributing
 
-PRs welcome! The codebase is structured for extensibility:
+PRs welcome! The codebase is organized by layer:
 
 - **New command?** Add a file to `commands/` with a `register_<name>(group)` function, import it in `main.py`.
 - **New handler?** Add a file to `content/handlers/` — follow the existing patterns.
-- **New extension?** Create `extensions/<name>/` with an `__init__.py` exposing `register_cli(group)`.
+- **New library function?** Add a wrapper to `api.py` and its name to `__all__`; the API tests fail if the handler it names is missing.
 
 Run the formatter before submitting:
 

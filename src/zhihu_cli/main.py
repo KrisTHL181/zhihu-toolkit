@@ -25,7 +25,6 @@ from zhihu_cli.commands.search import register_search
 from zhihu_cli.commands.stats import register_stats
 from zhihu_cli.commands.tools import register_tools
 from zhihu_cli.content.handlers.risk_control import ZhihuGateError
-from zhihu_cli.extensions import discover_extensions
 
 
 def _as_http_error(exc: BaseException) -> BaseException | None:
@@ -126,12 +125,6 @@ register_scrape(main)
 register_search(main)
 register_stats(main)
 register_tools(main)
-
-# ── extensions ─────────────────────────────────────────────────────────────
-
-# Auto-discover and register extension command groups.
-for _ext_mod in discover_extensions():
-    _ext_mod.register_cli(main)
 
 if __name__ == "__main__":
     main()

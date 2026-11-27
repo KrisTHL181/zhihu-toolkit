@@ -47,11 +47,9 @@ EXCLUDED_PATHS: frozenset[tuple[str, ...]] = frozenset(
 def _load_cli() -> click.Group | None:
     """Import the CLI entry point, or give up and serve only the shell tools.
 
-    ``zhihu_cli.main`` registers every built-in command group and then runs
-    ``discover_extensions()`` at *import* time. That catches ``ImportError`` and
-    nothing else, so an extension that raises anything else takes the import down
-    with it. Losing the typed tools is survivable; failing to start the server is
-    not.
+    ``zhihu_cli.main`` registers every built-in command group at *import* time.
+    A failure there would otherwise take the whole server down with it. Losing
+    the typed tools is survivable; failing to start the server is not.
 
     :returns: the root command group, or ``None`` if it could not be imported.
     """

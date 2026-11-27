@@ -71,6 +71,7 @@ jobs:
           ):
               for src in glob.glob(f"src/zhihu_cli/{sub}/{pattern}"):
                   expected.add(f"zhihu_cli/{sub}/{os.path.basename(src)}")
+          expected.add("zhihu_cli/py.typed")
           missing = expected - names
           assert not missing, f"wheel 缺失数据文件: {missing}"
           print(f"data files OK ({len(names)} 个文件)")
