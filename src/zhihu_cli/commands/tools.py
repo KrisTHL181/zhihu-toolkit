@@ -63,6 +63,35 @@ def _peek_body(resp: Any, limit: int = _BINARY_PEEK_BYTES) -> tuple[bytes, Itera
     return bytes(head), chunks
 
 
+def _stdout_is_tty() -> bool:
+    """Whether stdout is an interactive terminal.
+
+    Factored out so tests can force the terminal branch: ``CliRunner``
+    captures stdout, and patching ``sys.stdout`` while it is capturing is
+    fragile.
+
+    :returns: True when stdout is attached to a terminal.
+    """
+    return sys.stdout.isatty()
+
+
+def _stream_bytes(head: bytes, chunks: Iterator[bytes]) -> None:
+    """Write a streamed body to stdout unchanged, as raw bytes.
+
+    Used for a binary payload on a pipe.  Decoding it as text would replace
+    every non-UTF-8 byte with U+FFFD — the download would arrive corrupted
+    and roughly twice its real size.
+
+    :param head: Leading bytes already consumed by :func:`_peek_body`.
+    :param chunks: Iterator over the remaining body bytes.
+    """
+    out = click.get_binary_stream("stdout")
+    out.write(head)
+    for chunk in chunks:
+        out.write(chunk)
+    out.flush()
+
+
 def _stream_text(resp: Any, head: bytes, chunks: Iterator[bytes]) -> None:
     """Print a streamed body as text, reusing bytes already read into *head*.
 
@@ -320,10 +349,13 @@ def register_tools(main_group):
 
         Use --curl to see exactly what would be sent, without sending it.
 
-        When the body is printed to a terminal, only the first 8 KiB are
-        inspected for a NUL byte (the git/grep binary heuristic); a binary
-        payload is aborted at that point and nothing is printed.  Use
-        --output to save the raw body bytes instead.
+        When the body is printed to stdout it is streamed as it arrives, so
+        ``zhihu tools request URL | pv`` shows progress instead of waiting
+        for the whole download.  The first 8 KiB are inspected for a NUL
+        byte (the git/grep binary heuristic): on a terminal a binary payload
+        is aborted at that point and nothing is printed, while a piped
+        stdout receives the raw bytes unchanged.  Use --output to save the
+        raw body bytes instead.
 
         \b
         Examples:
@@ -355,22 +387,24 @@ def register_tools(main_group):
             return
 
         # ── send request ─────────────────────────────────────────────────
-        # Stream when the body is headed for the terminal, so a binary
-        # payload can be rejected after the first 8 KiB instead of being
-        # downloaded in full.  File and pipe outputs have nothing to guard.
-        stream_to_tty = sys.stdout.isatty() and output_file is None
+        # Stream whenever the body is headed for stdout — terminal or pipe.
+        # A buffered body emits nothing until the download has finished, so
+        # a progress tool down the pipe reads 0 B for its whole duration; and
+        # a pipe used to run the body through a lossy text decode.
+        stream_to_stdout = output_file is None
         resp = send_request(
             url,
             method=method,
             headers=parsed_headers if parsed_headers else None,
             data=data,
-            stream=stream_to_tty,
+            stream=stream_to_stdout,
         )
 
         # ── output ───────────────────────────────────────────────────────
-        if stream_to_tty:
+        if stream_to_stdout:
             head, chunks = _peek_body(resp)
-            if b"\0" in head:
+            binary = b"\0" in head
+            if binary and _stdout_is_tty():
                 resp.close()
                 error("Warning: Binary output can mess up your terminal. Use '--output <FILE>' to save to a file.")
                 raise click.exceptions.Exit(1)
@@ -381,7 +415,12 @@ def register_tools(main_group):
                     for k, v in resp.headers.items():
                         echo(f"{k}: {v}")
                     echo("")
-                _stream_text(resp, head, chunks)
+                if binary:
+                    # A pipe is not a terminal: pass the bytes through as-is,
+                    # so redirecting or piping a download is lossless.
+                    _stream_bytes(head, chunks)
+                else:
+                    _stream_text(resp, head, chunks)
             finally:
                 resp.close()
             return

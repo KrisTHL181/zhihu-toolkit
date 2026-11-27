@@ -11,6 +11,7 @@ from typing import TYPE_CHECKING
 import click
 from click.testing import CliRunner
 
+from zhihu_cli.commands import tools as tools_mod
 from zhihu_cli.commands.tools import _BINARY_PEEK_BYTES, _peek_body, _stream_text, register_tools
 from zhihu_cli.content.handlers import request_tool
 
@@ -87,6 +88,68 @@ def test_stream_text_decodes_split_multibyte(capsys: Any) -> None:
     _stream_text(FakeStream([]), data[:1], iter([data[1:]]))  # type: ignore[arg-type]
 
     assert capsys.readouterr().out == "中文\n"
+
+
+def _invoke_request(monkeypatch: Any, chunks: list[bytes]) -> tuple[Any, dict[str, Any]]:
+    """Run ``tools request`` against a fake streaming response.
+
+    :param monkeypatch: pytest monkeypatch fixture.
+    :param chunks: Body chunks the fake response yields.
+    :returns: ``(result, request_kwargs)`` — the :class:`click.testing.Result`
+        and the keyword arguments the command passed to ``send_request``.
+    """
+    stream = FakeStream(chunks)
+    captured: dict[str, Any] = {}
+
+    def fake_send(*args: Any, **kwargs: Any) -> FakeStream:
+        captured.update(kwargs)
+        return stream
+
+    monkeypatch.setattr(request_tool, "send_request", fake_send)
+
+    @click.group()
+    def group() -> None:
+        """Test root group."""
+
+    register_tools(group)
+    result = CliRunner().invoke(group, ["tools", "request", "https://example.com/blob"])
+    return result, captured
+
+
+def test_piped_response_is_requested_streaming(monkeypatch: Any) -> None:
+    """A pipe must not wait for the whole body: the request is streamed."""
+    result, kwargs = _invoke_request(monkeypatch, [b"hello"])
+
+    assert result.exit_code == 0, result.output
+    assert kwargs["stream"] is True
+
+
+def test_piped_binary_body_is_passed_through_raw(monkeypatch: Any) -> None:
+    """A binary body on a pipe must arrive byte-for-byte, not text-decoded."""
+    body = b"\x89PNG\r\n\x1a\n\x00\x00" + bytes(range(256))
+
+    result, _ = _invoke_request(monkeypatch, [body[:8], body[8:]])
+
+    assert result.exit_code == 0, result.output
+    assert result.stdout_bytes == body
+
+
+def test_piped_text_body_is_streamed_as_text(monkeypatch: Any) -> None:
+    """A textual body keeps the historical decoded output plus newline."""
+    result, _ = _invoke_request(monkeypatch, [b'{"ok": ', b"true}"])
+
+    assert result.exit_code == 0, result.output
+    assert result.stdout == '{"ok": true}\n'
+
+
+def test_binary_on_a_terminal_is_aborted(monkeypatch: Any) -> None:
+    """A terminal still refuses binary output instead of corrupting it."""
+    monkeypatch.setattr(tools_mod, "_stdout_is_tty", lambda: True)
+
+    result, _ = _invoke_request(monkeypatch, [b"header", b"\x00binary"])
+
+    assert result.exit_code == 1
+    assert result.stdout == ""
 
 
 def test_output_writes_raw_bytes(monkeypatch: Any, tmp_path: Path) -> None:
