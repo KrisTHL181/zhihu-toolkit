@@ -1,6 +1,17 @@
+"""Persistent per-user state for zhihu-cli.
+
+Profile files hold full login cookies, so both the ``cache/`` tree and the
+files inside it are kept private on POSIX: ``0o700`` for directories and
+``0o600`` for credential files.
+"""
+
+from __future__ import annotations
+
 import functools
 import json
 import math
+import os
+import tempfile
 import threading
 from collections.abc import Callable
 from pathlib import Path
@@ -10,10 +21,14 @@ from zhihu_cli.paths import zhihu_home
 
 
 class CacheManager:
-    _instance: "CacheManager | None" = None
+    _instance: CacheManager | None = None
     _lock: threading.Lock = threading.Lock()
 
-    def __new__(cls, *args: Any, **kwargs: Any) -> "CacheManager":
+    #: Directory and file modes for anything under :attr:`cache_dir`.
+    _PRIVATE_DIR_MODE = 0o700
+    _PRIVATE_FILE_MODE = 0o600
+
+    def __new__(cls, *args: Any, **kwargs: Any) -> CacheManager:
         if not cls._instance:
             with cls._lock:
                 if not cls._instance:
@@ -30,15 +45,16 @@ class CacheManager:
         else:
             self.cache_dir = Path(cache_dir).resolve()
 
-        self.cache_dir.mkdir(parents=True, exist_ok=True)
+        self.cache_dir.mkdir(parents=True, exist_ok=True, mode=self._PRIVATE_DIR_MODE)
         self.header_file = self.cache_dir / "headers.json"
 
         self.profiles_dir = self.cache_dir / "profiles"
-        self.profiles_dir.mkdir(exist_ok=True)
+        self.profiles_dir.mkdir(exist_ok=True, mode=self._PRIVATE_DIR_MODE)
         self.active_profile_file = self.cache_dir / "active_profile"
         self.config_file = self.cache_dir / "config.json"
 
         self._migrate_old_cache()
+        self._harden_permissions()
 
         self._file_lock = threading.RLock()
         self._initialized = True
@@ -47,7 +63,7 @@ class CacheManager:
     def make_thread_safe(fn: Callable | None = None, *, lock_attr: str = "_file_lock") -> Callable:
         def decorator(func: Callable) -> Callable:
             @functools.wraps(func)
-            def wrapper(self: "CacheManager", *args: Any, **kwargs: Any) -> Any:
+            def wrapper(self: CacheManager, *args: Any, **kwargs: Any) -> Any:
                 lock = getattr(self, lock_attr)
                 with lock:
                     return func(self, *args, **kwargs)
@@ -58,13 +74,71 @@ class CacheManager:
             return decorator
         return decorator(fn)
 
+    def _harden_permissions(self) -> None:
+        """Make the credential cache owner-only, including pre-existing files.
+
+        ``mkdir(mode=...)`` only applies at creation time, so a ``cache/`` tree
+        written by an older release keeps its umask-derived mode until it is
+        chmod-ed here.  Windows uses ACLs rather than the POSIX mode bits, and
+        ``os.chmod`` there cannot express "owner only", so this is a no-op on
+        that platform.  Symlinks are skipped: an attacker able to write to the
+        directory before it was tightened could otherwise point one at a file
+        outside the cache.
+        """
+        if os.name != "posix":
+            return
+
+        for directory in (self.cache_dir, self.profiles_dir):
+            try:
+                os.chmod(directory, self._PRIVATE_DIR_MODE)
+            except OSError:
+                pass
+
+        credential_files = [self.header_file, *self.profiles_dir.glob("*.json")]
+        for path in credential_files:
+            if path.is_symlink() or not path.is_file():
+                continue
+            try:
+                os.chmod(path, self._PRIVATE_FILE_MODE)
+            except OSError:
+                pass
+
     def _atomic_write(self, path: Path, data: str | bytes, mode: str = "w") -> None:
-        tmp_path = path.with_suffix(".tmp")
-        if mode == "w":
-            tmp_path.write_text(data, encoding="utf-8")
-        else:
-            tmp_path.write_bytes(data)
-        tmp_path.replace(path)
+        """Write *data* to *path* atomically and privately.
+
+        The temporary file is created with :func:`tempfile.mkstemp` in the
+        destination directory instead of the old fixed ``<name>.tmp``: a
+        random name neither follows a pre-planted symlink nor races another
+        writer.  ``mkstemp`` creates it with mode ``0o600`` on POSIX, and
+        :func:`os.replace` preserves that mode, so a credential never exists in
+        a world-readable file even briefly.
+
+        :param path: Destination file.
+        :param data: Text or bytes to write.
+        :param mode: ``"w"`` for text, ``"wb"`` for bytes.
+        :raises OSError: If the write or the replace fails.
+        """
+        fd, tmp_name = tempfile.mkstemp(dir=path.parent, prefix=f".{path.name}.", suffix=".tmp")
+        tmp_path = Path(tmp_name)
+        try:
+            if mode == "w":
+                if not isinstance(data, str):
+                    raise TypeError("text mode requires str data")
+                payload = data.encode("utf-8")
+            else:
+                if not isinstance(data, bytes):
+                    raise TypeError("binary mode requires bytes data")
+                payload = data
+            with os.fdopen(fd, "wb") as fh:
+                fh.write(payload)
+                fh.flush()
+                os.fsync(fh.fileno())
+            if os.name == "posix":
+                os.chmod(tmp_path, self._PRIVATE_FILE_MODE)
+            os.replace(tmp_path, path)
+        except BaseException:
+            tmp_path.unlink(missing_ok=True)
+            raise
 
     # ── profile management ──────────────────────────────────────────────
 
