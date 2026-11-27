@@ -1,9 +1,9 @@
 """Shared text-cleaning helpers for downloaded Zhihu content.
 
 These helpers operate on Markdown files written by the download pipeline and are
-shared by the NLP tools and the crank classifier. The module only depends on the
-standard library; ``yaml`` is imported lazily inside :func:`parse_frontmatter`
-because the NLP tools may be used without the base dependency installed.
+used by the NLP tools. The module only depends on the standard library; ``yaml``
+is imported lazily inside :func:`parse_frontmatter` because the NLP tools may be
+used without the base dependency installed.
 """
 
 from __future__ import annotations

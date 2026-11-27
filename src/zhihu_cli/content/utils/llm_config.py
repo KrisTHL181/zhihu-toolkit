@@ -50,7 +50,8 @@ DEFAULT_MAX_IMAGE_SIDE = 8000
 #: Current cache location for the LLM configuration.
 CONFIG_PATH = zhihu_home() / "llm_config.json"
 
-#: Pre-refactor cache location, read as a fallback and migrated on write.
+#: Pre-refactor cache location (the old ``crank/`` directory), read as a
+#: fallback and migrated on write.
 LEGACY_CONFIG_PATH = zhihu_home() / "crank" / "llm_config.json"
 
 #: Message shown when no API key could be resolved from any source.
@@ -407,46 +408,3 @@ def options(*, use_env: bool = True, vision: bool = False, image_side: bool = Fa
         return fn
 
     return decorator
-
-
-# ── back-compat adapters ─────────────────────────────────────────────────────
-# ``extensions/crank/archiver.py`` used to export these three names; keep the
-# dict-shaped signatures so existing importers keep working unchanged.
-
-
-def load_llm_config() -> dict[str, str]:
-    """Back-compat alias for :func:`load`.
-
-    :returns: The cached string values, or an empty dict.
-    """
-    return load()
-
-
-def save_llm_config(
-    api_base: str,
-    api_key: str,
-    model: str,
-    *,
-    vision: bool | None = None,
-    max_image_side: int | None = None,
-) -> None:
-    """Back-compat alias for :func:`save`.
-
-    :param api_base: API base URL to store.
-    :param api_key: API key to store.
-    :param model: Model name to store.
-    :param vision: Whether the model accepts image input; ``None`` keeps the
-        currently cached value.
-    :param max_image_side: Per-side image limit to store; ``None`` keeps the
-        currently cached value.
-    """
-    save(api_base, api_key, model, vision=vision, max_image_side=max_image_side)
-
-
-def llm_supports_vision(cfg: dict[str, str] | None = None) -> bool:
-    """Back-compat alias for :func:`supports_vision`.
-
-    :param cfg: Pre-loaded config; loaded from disk when omitted.
-    :returns: True when the configured model is declared to accept image input.
-    """
-    return supports_vision(cfg)

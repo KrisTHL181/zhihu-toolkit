@@ -7,10 +7,8 @@ An asset is a plain dictionary of the form::
 
 Assets are stored on disk as a plain JSON list of such dictionaries, so files
 written by older versions of the tool keep working unchanged. The live
-producer is ``zhihu scrape creations`` (creator API shape);
-``asset_from_item(item, "article")`` covers the raw article lists used by the
-crank extension. There is no heuristic detection — every caller names the
-source shape explicitly.
+producer is ``zhihu scrape creations`` (creator API shape); every caller names
+the source shape explicitly rather than relying on heuristic detection.
 """
 
 from __future__ import annotations
@@ -33,25 +31,6 @@ class Asset(TypedDict, total=False):
     title: str
     url: str
     created_time: int
-
-
-def _asset_from_article(item: dict[str, Any]) -> Asset | None:
-    """Adapt a raw article API item carrying an ``id`` and ``title``.
-
-    :param item: An article item with an ``id``.
-    :returns: The asset, or ``None`` when the item has no usable id.
-    """
-    raw_id = item.get("id")
-    if raw_id is None:
-        return None
-    asset_id = str(raw_id)
-    if not asset_id:
-        return None
-
-    asset: Asset = {"id": asset_id, "type": "article", "title": item.get("title") or f"article_{asset_id}"}
-    if "url" in item:
-        asset["url"] = item["url"]
-    return asset
 
 
 def _asset_from_creations(item: dict[str, Any]) -> Asset | None:
@@ -82,28 +61,18 @@ def _asset_from_creations(item: dict[str, Any]) -> Asset | None:
     }
 
 
-#: Adapter per source format.
-_ADAPTERS = {
-    "creations": _asset_from_creations,
-    "article": _asset_from_article,
-}
-
-
 def asset_from_item(item: dict[str, Any], source: str) -> Asset | None:
     """Convert a single source item into an asset.
 
     :param item: The source item to adapt.
-    :param source: Either ``"creations"`` (creator-API creation items) or
-        ``"article"`` (raw article API items), describing the shape of *item*.
+    :param source: ``"creations"`` (creator-API creation items), describing
+        the shape of *item*.
     :returns: The adapted asset, or ``None`` when the item has no usable id,
         is not the expected shape, or *source* is unknown.
     """
-    if not isinstance(item, dict):
+    if not isinstance(item, dict) or source != "creations":
         return None
-    adapter = _ADAPTERS.get(source)
-    if adapter is None:
-        return None
-    return adapter(item)
+    return _asset_from_creations(item)
 
 
 def load_json(file_path: str | Path) -> list[dict[str, Any]]:

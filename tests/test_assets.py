@@ -41,18 +41,6 @@ def test_asset_from_creation_rejects_unsupported_items(item: dict) -> None:
     assert asset_from_item(item, "creations") is None
 
 
-def test_asset_from_article() -> None:
-    """A raw article item becomes an article asset keyed by its id."""
-    item = {"id": 1, "title": "Raw article"}
-
-    assert asset_from_item(item, "article") == {"id": "1", "type": "article", "title": "Raw article"}
-
-
-def test_asset_from_article_rejects_missing_id() -> None:
-    """An article item without an id cannot become an asset."""
-    assert asset_from_item({"title": "no id"}, "article") is None
-
-
 def test_load_assets_skips_malformed_entries(tmp_path: Path) -> None:
     """Entries without an id/type or that are not dicts are skipped."""
     source = tmp_path / "assets.json"

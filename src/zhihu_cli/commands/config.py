@@ -291,10 +291,10 @@ def register_config(main_group: click.Group) -> None:
     # ── config llm (hand-rolled — multi-option set, dict-based show) ───
 
     @config.group("llm")
-    def config_crank_llm() -> None:
-        """Manage the cached LLM configuration for the crank extension."""
+    def config_llm() -> None:
+        """Manage the cached LLM configuration."""
 
-    @config_crank_llm.command("set")
+    @config_llm.command("set")
     @llm_config.options(use_env=False, vision=True, image_side=True)
     def config_llm_set(
         api_base: str | None,
@@ -303,7 +303,7 @@ def register_config(main_group: click.Group) -> None:
         vision: bool | None,
         max_image_side: int | None,
     ) -> None:
-        """Cache LLM credentials for the crank archiver.
+        """Cache LLM credentials for LLM-backed features.
 
         Every option is optional and falls back to the cached value, so a
         single field can be changed without retyping the rest.
@@ -345,7 +345,7 @@ def register_config(main_group: click.Group) -> None:
         ]
         success("LLM config saved:\n" + "\n".join(lines))
 
-    @config_crank_llm.command("show")
+    @config_llm.command("show")
     def config_llm_show() -> None:
         """Show the currently cached LLM configuration."""
         cfg = llm_config.load()
@@ -358,7 +358,7 @@ def register_config(main_group: click.Group) -> None:
         else:
             info("No cached LLM config found.")
 
-    @config_crank_llm.command("clear")
+    @config_llm.command("clear")
     def config_llm_clear() -> None:
         """Remove the cached LLM configuration."""
         if llm_config.clear():
