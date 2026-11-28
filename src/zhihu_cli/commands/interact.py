@@ -14,7 +14,7 @@ from zhihu_cli.commands._helpers import (
     _resolve_url_token,
     _save_json_output,
 )
-from zhihu_cli.content.handlers import get_type_and_id
+from zhihu_cli.content.handlers import fmt_time, get_type_and_id
 from zhihu_cli.content.handlers.article import (
     downvote_article,
     like_article,
@@ -33,11 +33,13 @@ from zhihu_cli.content.handlers.collection import (
     list_collections,
 )
 from zhihu_cli.content.handlers.comments import (
+    approve_comment,
     cancel_dislike_comment,
     cancel_like_comment,
     comment_item,
     delete_comment,
     dislike_comment,
+    fetch_reviewing_comments,
     like_comment,
 )
 from zhihu_cli.content.handlers.delete import delete_content
@@ -403,7 +405,7 @@ def register_interact(main_group) -> None:
 
     @interact.group("comment")
     def interact_comment() -> None:
-        """Post or delete comments."""
+        """Post, review, or delete comments."""
 
     @interact_comment.command("post")
     @click.argument("url")
@@ -499,6 +501,55 @@ def register_interact(main_group) -> None:
             print_json(resp)
             return
         success(f"Canceled dislike on comment {comment_id}")
+
+    @interact_comment.command("pending")
+    @click.argument("url")
+    @click.option("--max", "-n", "max_items", type=int, default=None, help="Max total items (default: all)")
+    @click.option("--json", "output_json", is_flag=True, default=False, help="Output as JSON")
+    def comment_pending(url: str, max_items: int | None, output_json: bool) -> None:
+        """List comments awaiting review (审核评论) on your content.
+
+        URL identifies the item (answer/article/pin/question) whose pending
+        comments you want to see.  Only the content owner sees anything here.
+
+        \b
+        Example:
+          zhihu interact comment pending https://zhuanlan.zhihu.com/p/123456
+        """
+        item_type, item_id = _parse_item_url(url)
+        if item_type == "answers":
+            item_id = _resolve_answer_id(item_id)
+        comments = list(fetch_reviewing_comments(item_type, item_id, limit=PAGE_SIZE, max_items=max_items))
+        if output_json:
+            print_json(comments)
+            return
+        if not comments:
+            info("No comments awaiting review.")
+            return
+        echo(f"  {f_bold(f'Pending review ({len(comments)})')}")
+        for i, comment in enumerate(comments, 1):
+            echo(
+                f"\n  {item_index(i)} {f_name(comment['author'])} "
+                f"{f_meta('| ID:')} {f_dim(comment['id'])} "
+                f"{f_meta('| Created:')} {f_meta(fmt_time(comment['created_time']))}"
+            )
+            echo(f"    {comment['content']}")
+
+    @interact_comment.command("approve")
+    @click.argument("comment_id")
+    @click.option("--json", "output_json", is_flag=True, default=False, help="Output raw JSON response")
+    def comment_approve(comment_id: str, output_json: bool) -> None:
+        """Approve a comment awaiting review (审核通过).
+
+        \b
+        Example:
+          zhihu interact comment approve 11626185490
+        """
+        resp = approve_comment(comment_id)
+        if output_json:
+            print_json(resp)
+            return
+        success(f"Approved comment {comment_id}")
 
     @interact_comment.command("interactive")
     @click.argument("url")

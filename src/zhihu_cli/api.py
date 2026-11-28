@@ -78,6 +78,7 @@ __all__ = [
     "fetch_root_comments",
     "fetch_child_comments",
     "fetch_segment_comments",
+    "fetch_reviewing_comments",
     "fetch_upvoters",
     "fetch_question_log",
     "fetch_followees",
@@ -373,6 +374,11 @@ def fetch_child_comments(*args: Any, **kwargs: Any) -> Iterable[dict[str, Any]]:
 def fetch_segment_comments(*args: Any, **kwargs: Any) -> Iterable[dict[str, Any]]:
     """Iterate an answer's segment comments — ``handlers.segment_comments.fetch_segment_comments``."""
     return _call("segment_comments", "fetch_segment_comments", *args, **kwargs)
+
+
+def fetch_reviewing_comments(*args: Any, **kwargs: Any) -> Iterable[dict[str, Any]]:
+    """Iterate comments awaiting review on your content — ``handlers.comments.fetch_reviewing_comments``."""
+    return _call("comments", "fetch_reviewing_comments", *args, **kwargs)
 
 
 def fetch_upvoters(*args: Any, **kwargs: Any) -> list[dict[str, Any]]:

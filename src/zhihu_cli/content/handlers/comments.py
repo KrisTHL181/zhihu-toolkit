@@ -1,3 +1,7 @@
+"""Comment handlers — list, post, delete, react to, and moderate comments."""
+
+from __future__ import annotations
+
 from collections.abc import Iterable, Iterator
 from typing import Any
 
@@ -25,6 +29,10 @@ _URL_SEGMENT: dict[str, str] = {
     "question": "questions",
     "questions": "questions",
 }
+
+REVIEWING_COMMENTS_API = (
+    "https://api.zhihu.com/comment_v5/{segment}/{item_id}/reviewing_comments?order_by=score&limit=20&offset="
+)
 
 
 def _convert_content(content: str) -> str:
@@ -170,6 +178,46 @@ def fetch_root_comments(
     return stream_handler(initial_url, root_parser, limit=limit, max_items=max_items)
 
 
+def fetch_reviewing_comments(
+    item_type: str, item_id: str, limit: int = PAGE_SIZE, max_items: int | None = None
+) -> Iterable[dict[str, Any]]:
+    """Iterate comments awaiting the author's review on one of their items.
+
+    The mobile-app endpoint behind Zhihu's comment-moderation queue.  It is
+    only populated for the content owner: non-owners get an empty list.
+
+    :param item_type: One of ``"answers"``, ``"articles"``, ``"pins"``,
+        ``"questions"`` (singular forms are accepted too, via the same mapping
+        as :func:`fetch_root_comments`).
+    :param item_id: The resource ID.
+    :param limit: number of comments requested per API page.
+    :param max_items: optional cap on the total number of comments yielded.
+    :returns: Lazy iterable of normalised comment dicts with ``id``,
+        ``author``, ``author_id``, ``author_token``, ``content`` (converted
+        to Markdown), ``created_time``, ``reply_comment_id``, ``can_delete``,
+        and ``reviewing``.
+    """
+    segment = _URL_SEGMENT.get(item_type, item_type)
+    initial_url = REVIEWING_COMMENTS_API.format(segment=segment, item_id=item_id)
+
+    def parser(data: dict[str, Any]) -> Iterator[dict[str, Any]]:
+        for comment in data.get("data") or []:
+            author = comment.get("author") or {}
+            yield {
+                "id": comment.get("id"),
+                "author": author.get("name", "anonymous"),
+                "author_id": author.get("id", ""),
+                "author_token": author.get("url_token", ""),
+                "content": _convert_content(comment.get("content", "")),
+                "created_time": comment.get("created_time"),
+                "reply_comment_id": comment.get("reply_comment_id", ""),
+                "can_delete": comment.get("can_delete", False),
+                "reviewing": comment.get("reviewing", False),
+            }
+
+    return stream_handler(initial_url, parser, limit=limit, max_items=max_items)
+
+
 def fetch_comments(item_type: str, item_id: str) -> list[dict[str, Any]]:
     """Return comment tree as a list of dicts (for JSON output)."""
     return list(fetch_root_comments(item_type, item_id))
@@ -284,6 +332,20 @@ def delete_comment(comment_id: str) -> None:
     data = safe_json(resp)
     if not isinstance(data, dict) or not data.get("success"):
         raise RuntimeError(f"Failed to delete comment {comment_id}")
+
+
+def approve_comment(comment_id: str) -> dict[str, Any]:
+    """Approve a comment that is awaiting the author's review.
+
+    :param comment_id: The pending comment's ID.
+    :returns: The API response dict (normally ``{"success": True}``).
+    :raises RuntimeError: If the API does not report success.
+    """
+    resp = session.put(f"https://www.zhihu.com/api/v4/comment_v5/comment/{comment_id}/operation/approve")
+    data = safe_json(resp)
+    if not isinstance(data, dict) or not data.get("success"):
+        raise RuntimeError(f"Failed to approve comment {comment_id}")
+    return data
 
 
 def like_comment(comment_id: str) -> dict[str, Any]:
